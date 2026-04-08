@@ -1,0 +1,115 @@
+pipeline {
+    agent {
+        label 'docker-agent'
+    }
+
+    environment {
+        // ====================================================
+        // TODO: Thay các giá trị dưới đây cho phù hợp với môi trường của bạn
+        // ====================================================
+        AWS_REGION       = 'ap-southeast-1'
+        ECR_REGISTRY     = '<aws_account_id>.dkr.ecr.ap-southeast-1.amazonaws.com'  // TODO: Thay <aws_account_id> bằng AWS Account ID thực tế
+        ECR_REPO_NAME    = 'retail-store/ui'                                         // TODO: Tên ECR repository, tạo trước trên AWS Console hoặc Terraform
+        IMAGE_TAG        = "${env.GIT_COMMIT?.take(7) ?: env.BUILD_ID}"              // Dùng 7 ký tự đầu của git commit hash, fallback sang BUILD_ID
+        FULL_IMAGE       = "${ECR_REGISTRY}/${ECR_REPO_NAME}:${IMAGE_TAG}"
+
+        // ====================================================
+        // ArgoCD GitOps repo (deploy qua git, không deploy trực tiếp)
+        // ====================================================
+        // TODO: Thay bằng Git repo chứa Helm values / Kustomize overlay của bạn
+        GITOPS_REPO      = 'https://github.com/<your-org>/gitops-config.git'         // TODO: URL repo GitOps
+        GITOPS_BRANCH    = 'main'
+        UI_VALUES_FILE   = 'apps/ui/values.yaml'                                     // TODO: Đường dẫn tới values.yaml của UI trong GitOps repo
+    }
+
+    stages {
+        // --------------------------------------------------------
+        // Stage 1: Build Docker Image
+        // --------------------------------------------------------
+        stage('Build Docker Image') {
+            steps {
+                echo "Building UI Service image: ${FULL_IMAGE}"
+                dir('src/ui') {
+                    sh "docker build -t ${FULL_IMAGE} ."
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 2: Push to ECR
+        // --------------------------------------------------------
+        stage('Push to ECR') {
+            steps {
+                echo "Authenticating with AWS ECR..."
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} \
+                        | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                """
+
+                echo "Pushing image: ${FULL_IMAGE}"
+                sh "docker push ${FULL_IMAGE}"
+
+                // TODO: (Tùy chọn) Push thêm tag 'latest' nếu muốn
+                // sh "docker tag ${FULL_IMAGE} ${ECR_REGISTRY}/${ECR_REPO_NAME}:latest"
+                // sh "docker push ${ECR_REGISTRY}/${ECR_REPO_NAME}:latest"
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 3: Deploy - Cập nhật image tag trong GitOps repo
+        //          ArgoCD sẽ tự detect thay đổi và deploy lên EKS
+        // --------------------------------------------------------
+        stage('Deploy (GitOps)') {
+            steps {
+                echo "Updating GitOps repo with new image tag: ${IMAGE_TAG}"
+
+                // TODO: Thêm credentials cho Git trong Jenkins
+                //       Jenkins > Manage Jenkins > Credentials > Add
+                //       Loại: Username with password (hoặc SSH key)
+                //       ID: 'gitops-credentials'
+                withCredentials([usernamePassword(
+                    credentialsId: 'gitops-credentials',       // TODO: Thay bằng credentials ID bạn đã tạo trong Jenkins
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_TOKEN'
+                )]) {
+                    sh """
+                        # Clone GitOps repo
+                        rm -rf gitops-config
+                        git clone https://\${GIT_USER}:\${GIT_TOKEN}@${GITOPS_REPO.replace('https://', '')} gitops-config
+                        cd gitops-config
+
+                        # Cập nhật image tag trong values.yaml
+                        # TODO: Điều chỉnh lệnh sed cho đúng cấu trúc values.yaml của bạn
+                        sed -i 's|tag:.*|tag: "${IMAGE_TAG}"|' ${UI_VALUES_FILE}
+
+                        # Commit & Push
+                        git config user.email "jenkins@ci.local"
+                        git config user.name "Jenkins CI"
+                        git add .
+                        git commit -m "chore(ui): update image tag to ${IMAGE_TAG}" || echo "No changes to commit"
+                        git push origin ${GITOPS_BRANCH}
+                    """
+                }
+
+                echo "ArgoCD will automatically sync and deploy the new image."
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline SUCCESS - Image: ${FULL_IMAGE}"
+            // TODO: (Tùy chọn) Gửi notification về Slack/Teams/Discord
+            // slackSend channel: '#deployments', message: "UI deployed: ${FULL_IMAGE}"
+        }
+        failure {
+            echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
+            // TODO: (Tùy chọn) Gửi alert khi fail
+            // slackSend channel: '#alerts', color: 'danger', message: "UI build FAILED: ${env.BUILD_URL}"
+        }
+        always {
+            // Cleanup Docker images trên build agent để tránh đầy disk
+            sh "docker rmi ${FULL_IMAGE} || true"
+        }
+    }
+}
