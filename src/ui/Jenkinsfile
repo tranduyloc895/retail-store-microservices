@@ -4,31 +4,39 @@ pipeline {
     }
 
     environment {
-        AWS_REGION       = 'ap-southeast-1'
-        AWS_ACCOUNT_ID   = credentials('aws-account-id')
-        ECR_REGISTRY     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        ECR_REPO_NAME    = 'retail-store/ui'
-        IMAGE_TAG        = "${env.GIT_COMMIT?.take(7) ?: env.BUILD_ID}"
-        FULL_IMAGE       = "${ECR_REGISTRY}/${ECR_REPO_NAME}:${IMAGE_TAG}"
+        AWS_REGION    = 'ap-southeast-1'
+        ECR_REPO_NAME = 'retail-store/ui'
     }
 
     stages {
         stage('Build Docker Image') {
             steps {
-                echo "Building UI Service image: ${FULL_IMAGE}"
-                dir('src/ui') {
-                    sh "docker build -t ${FULL_IMAGE} ."
+                script {
+                    env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                }
+                withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
+                    script {
+                        env.ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        env.FULL_IMAGE = "${env.ECR_REGISTRY}/${ECR_REPO_NAME}:${env.IMAGE_TAG}"
+                    }
+                    echo "Building UI Service image: ${env.FULL_IMAGE}"
+                    dir('src/ui') {
+                        sh 'docker build -t $FULL_IMAGE .'
+                    }
                 }
             }
         }
 
         stage('Push to ECR') {
             steps {
-                sh """
-                    aws ecr get-login-password --region ${AWS_REGION} \
-                        | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-                """
-                sh "docker push ${FULL_IMAGE}"
+                withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
+                    sh '''
+                        ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        aws ecr get-login-password --region $AWS_REGION \
+                            | docker login --username AWS --password-stdin $ECR_REGISTRY
+                        docker push $FULL_IMAGE
+                    '''
+                }
             }
         }
 
@@ -42,19 +50,19 @@ pipeline {
                     usernameVariable: 'GIT_USER',
                     passwordVariable: 'GIT_TOKEN'
                 )]) {
-                    sh """
+                    sh '''
                         rm -rf gitops-config
-                        git clone https://\${GIT_USER}:\${GIT_TOKEN}@github.com/\${GITOPS_REPO}.git gitops-config
+                        git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/${GITOPS_REPO}.git gitops-config
                         cd gitops-config
 
-                        sed -i 's|tag:.*|tag: "${IMAGE_TAG}"|' ${UI_VALUES_FILE}
+                        sed -i "s|tag:.*|tag: ${IMAGE_TAG}|" ${UI_VALUES_FILE}
 
                         git config user.email "jenkins@ci.local"
                         git config user.name "Jenkins CI"
                         git add .
                         git commit -m "chore(ui): update image tag to ${IMAGE_TAG}" || echo "No changes"
                         git push origin ${GITOPS_BRANCH}
-                    """
+                    '''
                 }
             }
         }
@@ -62,13 +70,13 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline SUCCESS - Image: ${FULL_IMAGE}"
+            echo "Pipeline SUCCESS - Image: ${env.FULL_IMAGE}"
         }
         failure {
             echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
         }
         always {
-            sh "docker rmi ${FULL_IMAGE} || true"
+            sh 'docker rmi $FULL_IMAGE || true'
         }
     }
 }

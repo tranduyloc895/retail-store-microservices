@@ -23,9 +23,9 @@ RUN ./mvnw -DskipTests package -q \
 # ============================================================
 FROM eclipse-temurin:21-jre
 
-# Create non-root user for security (use -f to ignore if GID/UID already exists)
-RUN groupadd --gid 1000 -f appuser \
-    && (useradd --uid 1000 --gid 1000 --create-home appuser 2>/dev/null || true)
+# Create non-root user for security (UID 10001 to avoid conflicts with base image)
+RUN groupadd --gid 10001 appuser \
+    && useradd --uid 10001 --gid 10001 --create-home appuser
 
 ENV SPRING_PROFILES_ACTIVE=prod
 
