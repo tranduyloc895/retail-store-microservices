@@ -6,6 +6,7 @@ pipeline {
     environment {
         AWS_REGION    = 'ap-southeast-1'
         ECR_REPO_NAME = 'retail-store/ui'
+        EKS_CLUSTER   = 'ecommerce-cluster'
     }
 
     stages {
@@ -19,9 +20,8 @@ pipeline {
                         env.ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
                         env.FULL_IMAGE = "${env.ECR_REGISTRY}/${ECR_REPO_NAME}:${env.IMAGE_TAG}"
                     }
-                    echo "Building UI Service image: ${env.FULL_IMAGE}"
                     dir('src/ui') {
-                        sh 'docker build -t $FULL_IMAGE .'
+                        sh 'echo "Building: $FULL_IMAGE" && docker build -t $FULL_IMAGE .'
                     }
                 }
             }
@@ -40,37 +40,30 @@ pipeline {
             }
         }
 
-        stage('Deploy (GitOps)') {
-            when {
-                expression { return env.GITOPS_ENABLED == 'true' }
-            }
+        stage('Deploy to EKS') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'gitops-credentials',
-                    usernameVariable: 'GIT_USER',
-                    passwordVariable: 'GIT_TOKEN'
-                )]) {
-                    sh '''
-                        rm -rf gitops-config
-                        git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/${GITOPS_REPO}.git gitops-config
-                        cd gitops-config
+                sh '''
+                    aws eks update-kubeconfig --name $EKS_CLUSTER --region $AWS_REGION
 
-                        sed -i "s|tag:.*|tag: ${IMAGE_TAG}|" ${UI_VALUES_FILE}
+                    kubectl apply -f deploy/k8s/ui/namespace.yaml
+                    kubectl apply -f deploy/k8s/ui/service.yaml
 
-                        git config user.email "jenkins@ci.local"
-                        git config user.name "Jenkins CI"
-                        git add .
-                        git commit -m "chore(ui): update image tag to ${IMAGE_TAG}" || echo "No changes"
-                        git push origin ${GITOPS_BRANCH}
-                    '''
-                }
+                    sed "s|IMAGE_PLACEHOLDER|$FULL_IMAGE|g" deploy/k8s/ui/deployment.yaml \
+                        | kubectl apply -f -
+
+                    kubectl rollout status deployment/ui -n retail-store --timeout=120s
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "Pipeline SUCCESS - Image: ${env.FULL_IMAGE}"
+            sh '''
+                echo "Pipeline SUCCESS - Image: $FULL_IMAGE"
+                echo "Service URL:"
+                kubectl get svc ui -n retail-store -o jsonpath="{.status.loadBalancer.ingress[0].hostname}" 2>/dev/null || echo "(LoadBalancer provisioning...)"
+            '''
         }
         failure {
             echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
