@@ -52,11 +52,11 @@ pipeline {
                         git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/tranduyloc895/retail-store-gitops.git gitops-repo
                         cd gitops-repo
 
-                        sed -i "s|image:.*retail-store/ui.*|image: $FULL_IMAGE|" apps/ui/deployment.yaml
+                        sed -i "s|image:.*retail-store/ui.*|image: $FULL_IMAGE|" apps/ui/deployment.yml
 
                         git config user.email "jenkins@ci.local"
                         git config user.name "Jenkins CI"
-                        git add apps/ui/deployment.yaml
+                        git add apps/ui/deployment.yml
                         git diff --staged --quiet || git commit -m "chore(ui): update image to $IMAGE_TAG"
                         git push origin main
                     '''
