@@ -1,0 +1,84 @@
+pipeline {
+    agent {
+        label 'docker-agent'
+    }
+
+    environment {
+        AWS_REGION    = 'ap-southeast-1'
+        ECR_REPO_NAME = 'retail-store/orders'
+        EKS_CLUSTER   = 'ecommerce-cluster'
+    }
+
+    stages {
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                }
+                withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
+                    script {
+                        env.ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        env.FULL_IMAGE   = "${env.ECR_REGISTRY}/${ECR_REPO_NAME}:${env.IMAGE_TAG}"
+                    }
+                    dir('src/orders') {
+                        sh 'echo "Building: $FULL_IMAGE" && docker build -t $FULL_IMAGE .'
+                    }
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
+                    sh '''
+                        ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        aws ecr get-login-password --region $AWS_REGION \
+                            | docker login --username AWS --password-stdin $ECR_REGISTRY
+                        docker push $FULL_IMAGE
+                    '''
+                }
+            }
+        }
+
+        stage('Update GitOps') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'github-gitops-token',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_TOKEN'
+                )]) {
+                    sh '''
+                        rm -rf gitops-repo
+                        git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/tranduyloc895/retail-store-gitops.git gitops-repo
+                        cd gitops-repo
+
+                        sed -i "s|image:.*retail-store/orders.*|image: $FULL_IMAGE|" apps/orders/deployment.yml
+                        grep -q "$FULL_IMAGE" apps/orders/deployment.yml || { echo "sed FAILED: image tag not updated"; exit 1; }
+
+                        git config user.email "jenkins@ci.local"
+                        git config user.name  "Jenkins CI"
+                        git add apps/orders/deployment.yml
+                        git diff --staged --quiet || git commit -m "chore(orders): update image to $IMAGE_TAG"
+                        git push origin main
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            sh '''
+                echo "Pipeline SUCCESS - Image: $FULL_IMAGE"
+                kubectl get svc orders -n retail-store -o jsonpath="{.status.loadBalancer.ingress[0].hostname}" 2>/dev/null \
+                    || echo "(orders thường là ClusterIP, không có LoadBalancer)"
+            '''
+        }
+        failure {
+            echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
+        }
+        always {
+            sh 'docker rmi $FULL_IMAGE || true'
+        }
+    }
+}
