@@ -1,57 +1,52 @@
-# Build Stage
+# ============================================================
+# Stage 1: Build
+# ============================================================
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS build-env
 
-# We tell DNF not to install Recommends and Suggests packages, which are
-# weak dependencies in DNF terminology, thus keeping our installed set of
-# packages as minimal as possible.
+# Chỉ cài gói cần thiết, bỏ qua weak deps cho image gọn nhất
 RUN dnf --setopt=install_weak_deps=False install -q -y \
     git \
     golang \
-    && \
-    dnf clean all
-
-RUN mkdir -p "${GOPATH}/src" "${GOPATH}/bin" /appsrc
+    && dnf clean all
 
 WORKDIR /appsrc
 
 ENV GOPROXY=https://goproxy.io,direct
 
+# Cache dependencies layer: chỉ invalidate khi go.mod/go.sum đổi
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-RUN go build -o main main.go
+# Build binary tĩnh, strip debug info để image nhỏ hơn
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o main main.go
 
-# Final stage
+# ============================================================
+# Stage 2: Runtime (minimal image)
+# ============================================================
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
-ENV APPUSER=appuser
-ENV APPUID=1000
-ENV APPGID=1000
-
-# We tell DNF not to install Recommends and Suggests packages, which are
-# weak dependencies in DNF terminology, thus keeping our installed set of
-# packages as minimal as possible.
+# curl-minimal đã có sẵn; chỉ cần shadow-utils để tạo user
 RUN dnf --setopt=install_weak_deps=False install -q -y \
     shadow-utils \
-    && \
-    dnf clean all
+    && dnf clean all
 
-RUN useradd \
-    --home "/app" \
-    --create-home \
-    --user-group \
-    --uid "$APPUID" \
-    "$APPUSER"
+# Tạo non-root user với UID 10001 (tránh xung đột UID 1000 mặc định của 1 số base image)
+RUN groupadd --gid 10001 appuser \
+    && useradd --uid 10001 --gid 10001 --home /app --create-home appuser
 
 WORKDIR /app
-USER appuser
 
 COPY --chown=appuser:appuser --from=build-env /appsrc/main /app/
 
-COPY ./ATTRIBUTION.md ./LICENSES.md
-
 ENV GIN_MODE=release
+
+USER appuser
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
 
 ENTRYPOINT ["/app/main"]

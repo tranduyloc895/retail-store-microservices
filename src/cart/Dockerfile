@@ -1,65 +1,52 @@
-# Build Stage
-FROM public.ecr.aws/amazonlinux/amazonlinux:2023 as build-env
+# ============================================================
+# Stage 1: Build
+# ============================================================
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS build-env
 
-# We tell DNF not to install Recommends and Suggests packages, keeping our
-# installed set of packages as minimal as possible.
 RUN dnf --setopt=install_weak_deps=False install -q -y \
-    maven \
     java-21-amazon-corretto-headless \
-    which \
-    tar \
-    gzip \
-    && \
-    dnf clean all
+    which tar gzip \
+    && dnf clean all
 
-ARG JAR_PATH
+WORKDIR /workspace
 
-VOLUME /tmp
-WORKDIR /
-
+# Cache dependencies layer: chỉ invalidate khi pom.xml / mvn wrapper đổi
 COPY .mvn .mvn
 COPY mvnw .
 COPY pom.xml .
+RUN chmod +x mvnw && ./mvnw dependency:go-offline -B -q
 
-RUN ./mvnw dependency:go-offline -B -q
-
+# Copy source và build
 COPY ./src ./src
+RUN ./mvnw -DskipTests package -q \
+    && mv target/carts-0.0.1-SNAPSHOT.jar /app.jar
 
-RUN ./mvnw -DskipTests package -q && \
-    mv /target/carts-0.0.1-SNAPSHOT.jar /app.jar
-
-# Package Stage
+# ============================================================
+# Stage 2: Runtime (minimal JRE)
+# ============================================================
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023
 
-# We tell DNF not to install Recommends and Suggests packages, which are
-# weak dependencies in DNF terminology, thus keeping our installed set of
-# packages as minimal as possible.
 RUN dnf --setopt=install_weak_deps=False install -q -y \
     java-21-amazon-corretto-headless \
     shadow-utils \
-    && \
-    dnf clean all
+    && dnf clean all
 
-ENV APPUSER=appuser
-ENV APPUID=1000
-ENV APPGID=1000
+# Non-root user UID 10001 (theo chuẩn dự án)
+RUN groupadd --gid 10001 appuser \
+    && useradd --uid 10001 --gid 10001 --home /app --create-home appuser
 
-RUN useradd \
-    --home "/app" \
-    --create-home \
-    --user-group \
-    --uid "$APPUID" \
-    "$APPUSER"
-
-ENV JAVA_TOOL_OPTIONS=
 ENV SPRING_PROFILES_ACTIVE=prod
+ENV JAVA_TOOL_OPTIONS=
 
 WORKDIR /app
-USER appuser
 
-COPY ./ATTRIBUTION.md ./LICENSES.md
-COPY --chown=appuser:appuser --from=build-env /app.jar .
+COPY --chown=appuser:appuser --from=build-env /app.jar /app/app.jar
+
+USER appuser
 
 EXPOSE 8080
 
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/actuator/health/readiness || exit 1
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -XX:MaxRAMPercentage=75.0 -Djava.security.egd=file:/dev/urandom -jar /app/app.jar"]
