@@ -1,89 +1,94 @@
 # Retail Store Microservices
 
-Source code microservices cho dự án **DevSecOps E-commerce** (NT114 - UIT). Ứng dụng mô phỏng một cửa hàng bán lẻ trực tuyến với kiến trúc microservices, phục vụ làm workload cho pipeline CI/CD và triển khai lên Kubernetes (EKS) qua GitOps.
+Source code for the microservices of the **DevSecOps E-commerce** project (NT114 — UIT). The application models an online retail store with a microservices architecture and serves as the workload for the CI/CD pipeline and GitOps deployment on Kubernetes (EKS).
 
-> Source code gốc: [aws-containers/retail-store-sample-app](https://github.com/aws-containers/retail-store-sample-app) (MIT-0 License). Đã được tinh gọn, chỉ giữ lại phần microservice code + thêm Jenkinsfile.
-
----
-
-## Mục lục
-
-- [Kiến trúc ứng dụng](#kiến-trúc-ứng-dụng)
-- [Danh sách microservices](#danh-sách-microservices)
-- [Cấu trúc thư mục](#cấu-trúc-thư-mục)
-- [Chạy local bằng Docker Compose](#chạy-local-bằng-docker-compose)
-- [Pipeline CI/CD (Jenkins + GitOps)](#pipeline-cicd-jenkins--gitops)
-- [Build từng service](#build-từng-service)
-- [Trạng thái onboarding pipeline](#trạng-thái-onboarding-pipeline)
-- [Liên kết repo](#liên-kết-repo)
+> Upstream source: [aws-containers/retail-store-sample-app](https://github.com/aws-containers/retail-store-sample-app) (MIT-0 License). Trimmed to keep only the microservice code plus the Jenkinsfiles.
 
 ---
 
-## Kiến trúc ứng dụng
+## Table of Contents
+
+- [Application Architecture](#application-architecture)
+- [Microservices](#microservices)
+- [Directory Structure](#directory-structure)
+- [Run Locally with Docker Compose](#run-locally-with-docker-compose)
+- [CI/CD Pipeline (Jenkins + GitOps)](#cicd-pipeline-jenkins--gitops)
+- [Build Each Service](#build-each-service)
+- [Pipeline Onboarding Status](#pipeline-onboarding-status)
+- [Cleanup After Each Lab](#cleanup-after-each-lab)
+- [Related Repos](#related-repos)
+
+---
+
+## Application Architecture
 
 ```
                     ┌──────────────────────────────┐
-                    │           UI (Java)           │
-                    │        Spring Boot :8080      │
-                    │   Giao diện web, Thymeleaf    │
+                    │           UI (Java)          │
+                    │       Spring Boot :8080      │
+                    │    Web frontend, Thymeleaf   │
                     └──┬──────┬──────┬──────┬──────┘
                        │      │      │      │
             ┌──────────▼┐ ┌───▼────┐ ▼      ▼
-            │  Catalog   │ │  Cart  │ Orders  Checkout
-            │   (Go)     │ │ (Java) │ (Java)  (TypeScript)
-            │  Gin :8080 │ │  :8080 │ :8080    NestJS :8080
-            └──────┬─────┘ └───┬───┘ ┌┴───┐    ┌──┴──┐
-                   │           │     │    │    │     │
-               MariaDB     DynamoDB  PG  RMQ  Redis  │
-               (catalog)   (carts) (orders)  (checkout)
+            │  Catalog  │ │  Cart  │ Orders  Checkout
+            │   (Go)    │ │ (Java) │ (Java)  (TypeScript)
+            │  Gin :8080│ │  :8080 │ :8080    NestJS :8080
+            └──────┬────┘ └───┬────┘ ┌┴───┐   ┌──┴──┐
+                   │          │      │    │   │     │
+               MariaDB    DynamoDB  PG   RMQ Redis  │
+               (catalog)  (carts) (orders)  (checkout)
 ```
 
-## Danh sách microservices
+## Microservices
 
-| Service | Ngôn ngữ | Framework | Port | Database | Mô tả |
-|---------|----------|-----------|------|----------|-------|
-| **UI** | Java 21 | Spring Boot 3.5 + Thymeleaf | 8080 | - | Giao diện web, gọi tới các service khác |
-| **Catalog** | Go | Gin | 8080 | MariaDB | API danh mục sản phẩm |
-| **Cart** | Java 21 | Spring Boot 3.5 | 8080 | DynamoDB (local) | API giỏ hàng |
-| **Orders** | Java 21 | Spring Boot 3.5 | 8080 | PostgreSQL + RabbitMQ | API quản lý đơn hàng |
-| **Checkout** | TypeScript | NestJS 11 | 8080 | Redis | API xử lý thanh toán |
+| Service | Language | Framework | Port | Database | Description |
+|---------|----------|-----------|------|----------|-------------|
+| **UI** | Java 21 | Spring Boot 3.5 + Thymeleaf | 8080 | — | Web frontend; calls every other service |
+| **Catalog** | Go | Gin | 8080 | MariaDB | Product catalog API |
+| **Cart** | Java 21 | Spring Boot 3.5 | 8080 | DynamoDB (local) | Shopping cart API |
+| **Orders** | Java 21 | Spring Boot 3.5 | 8080 | PostgreSQL + RabbitMQ | Orders management API |
+| **Checkout** | TypeScript | NestJS 11 | 8080 | Redis | Checkout / payment API |
 
 ---
 
-## Cấu trúc thư mục
+## Directory Structure
 
 ```
 retail-store-microservices/
 ├── src/
 │   ├── ui/                    # Web UI (Java/Spring Boot)
 │   │   ├── Dockerfile         #   Multi-stage build, non-root user UID 10001
-│   │   ├── Jenkinsfile        #   Pipeline CI/CD (Build → Push → Update GitOps)
+│   │   ├── Jenkinsfile        #   Pipeline (Build → Push → Update GitOps)
 │   │   ├── pom.xml
 │   │   └── src/
 │   │
 │   ├── catalog/               # Product Catalog (Go/Gin)
 │   │   ├── Dockerfile
+│   │   ├── Jenkinsfile
 │   │   ├── main.go
 │   │   ├── go.mod
-│   │   └── (controller, model, repository...)
+│   │   └── (controller, model, repository, ...)
 │   │
 │   ├── cart/                  # Shopping Cart (Java/Spring Boot)
 │   │   ├── Dockerfile
+│   │   ├── Jenkinsfile
 │   │   ├── pom.xml
 │   │   └── src/
 │   │
 │   ├── checkout/              # Checkout (TypeScript/NestJS)
 │   │   ├── Dockerfile
+│   │   ├── Jenkinsfile
 │   │   ├── package.json
 │   │   └── src/
 │   │
 │   ├── orders/                # Orders (Java/Spring Boot)
 │   │   ├── Dockerfile
+│   │   ├── Jenkinsfile
 │   │   ├── pom.xml
 │   │   └── src/
 │   │
 │   └── app/
-│       └── docker-compose.yml # Orchestration cho local dev
+│       └── docker-compose.yml # Orchestration for local dev
 │
 ├── .gitignore
 ├── LICENSE
@@ -92,27 +97,27 @@ retail-store-microservices/
 
 ---
 
-## Chạy local bằng Docker Compose
+## Run Locally with Docker Compose
 
-### Yêu cầu
+### Requirements
 
 - [Docker](https://docs.docker.com/get-docker/) >= 24.0
 - [Docker Compose](https://docs.docker.com/compose/) >= 2.20
 
-### Khởi chạy toàn bộ services
+### Start all services
 
 ```bash
-# Set password cho databases
+# Set the password for the databases
 export DB_PASSWORD=your_password_here
 
-# Khởi chạy
+# Start
 docker compose --project-directory src/app up --build -d
 
-# Kiểm tra trạng thái
+# Check status
 docker compose --project-directory src/app ps
 ```
 
-Truy cập: `http://localhost:8888`
+Open: `http://localhost:8888`
 
 ### Port mapping
 
@@ -124,7 +129,7 @@ Truy cập: `http://localhost:8888`
 | Orders API | `http://localhost:8083` |
 | Checkout API | `http://localhost:8085` |
 
-### Dừng services
+### Stop services
 
 ```bash
 docker compose --project-directory src/app down
@@ -132,17 +137,17 @@ docker compose --project-directory src/app down
 
 ---
 
-## Pipeline CI/CD (Jenkins + GitOps)
+## CI/CD Pipeline (Jenkins + GitOps)
 
-Pipeline áp dụng mô hình **GitOps**: Jenkins build image + push ECR + cập nhật manifest trong repo `retail-store-gitops`, còn việc apply lên cluster do **ArgoCD** đảm nhận.
+The pipeline follows the **GitOps** model: Jenkins builds the image, pushes to ECR, and updates the manifest in the `retail-store-gitops` repo. Applying manifests to the cluster is **ArgoCD**'s job.
 
-### Luồng hoàn chỉnh
+### Full flow
 
 ```
-Developer push code (repo này)
+Developer pushes code (this repo)
         │
         ▼
-Jenkins Agent trigger pipeline
+Jenkins Agent triggers the pipeline
         │
         ├─── Stage 1: Build Docker Image
         │       • git rev-parse --short=7 HEAD → IMAGE_TAG
@@ -154,25 +159,25 @@ Jenkins Agent trigger pipeline
         │
         └─── Stage 3: Update GitOps
                 • git clone retail-store-gitops
-                • sed thay image tag trong apps/<service>/deployment.yml
-                • git commit + push lên main
+                • sed replaces the image tag in apps/<service>/deployment.yml
+                • git commit + push to main
                         │
                         ▼
-                ArgoCD poll (mỗi 3 phút) / webhook
+                ArgoCD polls (every 3 min) / webhook
                         │
                         ▼
-                ArgoCD sync → kubectl apply vào EKS
+                ArgoCD sync → kubectl apply into EKS
                         │
                         ▼
-                Rolling update pod (K8s)
+                Rolling pod update (K8s)
                         │
                         ▼
-                Version mới live trên ELB
+                New version live behind the ELB
 ```
 
-### Jenkinsfile của UI (tham khảo khi viết cho service khác)
+### Jenkinsfile (used by every service, parameterized)
 
-File: `src/ui/Jenkinsfile`. Cấu trúc 3 stage:
+Located at `src/<service>/Jenkinsfile`. Three stages:
 
 ```groovy
 pipeline {
@@ -180,70 +185,70 @@ pipeline {
 
     environment {
         AWS_REGION    = 'ap-southeast-1'
-        ECR_REPO_NAME = 'retail-store/ui'
+        ECR_REPO_NAME = 'retail-store/<service>'
         EKS_CLUSTER   = 'ecommerce-cluster'
     }
 
     stages {
         stage('Build Docker Image') { /* ... */ }
-        stage('Push to ECR')         { /* ... */ }
-        stage('Update GitOps')       { /* ... */ }
+        stage('Push to ECR')        { /* ... */ }
+        stage('Update GitOps')      { /* ... */ }
     }
 }
 ```
 
-**Điểm kỹ thuật quan trọng:**
+**Key technical decisions:**
 
-| Vấn đề | Giải pháp |
-|--------|-----------|
-| Image tag phải trace được về commit | `git rev-parse --short=7 HEAD` làm tag |
-| AWS Account ID không được hardcode | Lưu trong Jenkins Credential `aws-account-id` (Secret text) |
-| GitHub token không được leak trong log | Dùng `withCredentials` + single-quoted shell string |
-| Dockerfile base image có sẵn user UID 1000 | Tạo app user với UID 10001 để tránh conflict |
-| `sed` thay image tag có thể silent-fail | Sau sed phải `grep` verify tag mới xuất hiện |
-| Pipeline commit Git nhưng không có thay đổi | `git diff --staged --quiet \|\| git commit` (idempotent) |
+| Concern | Solution |
+|---------|----------|
+| Image tag must trace back to a commit | `git rev-parse --short=7 HEAD` as the tag |
+| AWS Account ID must not be hard-coded | Stored in the Jenkins Credential `aws-account-id` (Secret text) |
+| GitHub token must not leak in logs | `withCredentials` + single-quoted shell strings |
+| Dockerfile base image has UID 1000 in use | Create the app user with UID 10001 to avoid conflicts |
+| `sed` can silent-fail | After `sed`, `grep` verifies the new tag is present |
+| Pipeline commits even when nothing changed | `git diff --staged --quiet \|\| git commit` (idempotent) |
 
-### Credentials cần tạo trong Jenkins
+### Credentials to create in Jenkins
 
-| Credential ID | Kind | Mục đích |
-|---------------|------|----------|
-| `aws-account-id` | Secret text | AWS Account ID (dùng khi login ECR) |
-| `jenkins-agent-ssh` | SSH Username with private key | Master kết nối SSH vào Agent |
-| `github-gitops-token` | Username with password | Jenkins push manifest vào repo `retail-store-gitops` |
+| Credential ID | Kind | Purpose |
+|---------------|------|---------|
+| `aws-account-id` | Secret text | AWS Account ID (used during ECR login) |
+| `jenkins-agent-ssh` | SSH Username with private key | Master connects to the Agent over SSH |
+| `github-gitops-token` | Username with password | Jenkins pushes manifest changes to `retail-store-gitops` |
 
-**Quyền token GitHub** (nguyên tắc least-privilege):
-- Repository: chỉ `retail-store-gitops`
-- Permissions: **Contents: Read and write** + **Metadata: Read** (bắt buộc auto)
-- Không cấp Administration, Secrets, Webhooks, Actions, hay bất kỳ quyền nào khác.
+**GitHub token permissions** (least-privilege):
+- Repository: only `retail-store-gitops`
+- Permissions: **Contents: Read and write** + **Metadata: Read** (required automatically)
+- Do not grant Administration, Secrets, Webhooks, Actions, or any other permission.
 
-### Pipeline Job setup trong Jenkins
+### Pipeline job setup in Jenkins
 
-- **Type**: Pipeline
-- **Pipeline definition**: Pipeline script from SCM
-- **SCM**: Git
-- **Repository URL**: `<URL repo này>`
-- **Branch**: `*/main`
-- **Script Path**: `src/ui/Jenkinsfile` (hoặc `src/<service>/Jenkinsfile`)
+- **Type:** Pipeline
+- **Pipeline definition:** Pipeline script from SCM
+- **SCM:** Git
+- **Repository URL:** `<URL of this repo>`
+- **Branch:** `*/main`
+- **Script Path:** `src/<service>/Jenkinsfile` (one job per service)
 
-### Trigger tự động (roadmap)
+### Automatic trigger (roadmap)
 
-Hiện tại pipeline được trigger thủ công (click "Build Now"). Để tự động:
+Currently the pipeline is triggered manually (click "Build Now"). To automate:
 
-**Option A — Webhook GitHub → Jenkins**:
-1. Jenkins cần URL public (port-forward hiện tại chỉ local)
-2. Tại repo GitHub → Settings → Webhooks → thêm URL `https://<jenkins-url>/github-webhook/`
-3. Cấu hình pipeline: `triggers { githubPush() }`
+**Option A — GitHub webhook → Jenkins:**
+1. Jenkins needs a public URL (the current port-forward is local only).
+2. In the GitHub repo → Settings → Webhooks → add `https://<jenkins-url>/github-webhook/`.
+3. Configure the pipeline: `triggers { githubPush() }`.
 
-**Option B — Polling SCM** (đơn giản hơn, không cần expose Jenkins):
+**Option B — SCM polling** (simpler, no need to expose Jenkins):
 ```groovy
 triggers {
-    pollSCM('H/5 * * * *')  // check repo mỗi 5 phút
+    pollSCM('H/5 * * * *')  // check the repo every 5 minutes
 }
 ```
 
 ---
 
-## Build từng service
+## Build Each Service
 
 ```bash
 # UI
@@ -264,32 +269,48 @@ docker build -t retail-store/orders:latest src/orders/
 
 ---
 
-## Trạng thái onboarding pipeline
+## Pipeline Onboarding Status
 
-| Service | Dockerfile | Jenkinsfile | Manifest GitOps | ArgoCD App | Trạng thái |
-|---------|-----------|-------------|-----------------|------------|-----------|
-| UI | ✅ | ✅ | ✅ | ✅ | **Hoạt động end-to-end** |
-| Catalog | ✅ | ⏳ | ⏳ | ⏳ | Chưa onboard |
-| Cart | ✅ | ⏳ | ⏳ | ⏳ | Chưa onboard |
-| Orders | ✅ | ⏳ | ⏳ | ⏳ | Chưa onboard |
-| Checkout | ✅ | ⏳ | ⏳ | ⏳ | Chưa onboard |
+| Service | Dockerfile | Jenkinsfile | GitOps manifests | ArgoCD App | Status |
+|---------|-----------|-------------|------------------|------------|--------|
+| UI | Yes | Yes | Yes | Yes | **Live end-to-end** |
+| Catalog | Yes | Yes | Yes | Yes | **Live end-to-end** |
+| Cart | Yes | Yes | Yes | Yes | **Live end-to-end** |
+| Orders | Yes | Yes | Yes | Yes | **Live end-to-end** |
+| Checkout | Yes | Yes | Yes | Yes | **Live end-to-end** |
 
-Để onboard service mới, xem hướng dẫn **"Thêm service mới"** trong README của repo [retail-store-gitops](https://github.com/tranduyloc895/retail-store-gitops).
+All 5 services have been onboarded. To add a 6th service, follow the **"Adding a New Service"** guide in the [retail-store-gitops](https://github.com/tranduyloc895/retail-store-gitops) README.
 
 ---
 
-## Liên kết repo
+## Cleanup After Each Lab
 
-| Repo | Vai trò |
-|------|---------|
+Source code itself costs nothing, but leaving the local Docker Compose stack running consumes memory and disk. After a local dev session:
+
+```bash
+# Stop and remove containers, networks, and images created by compose
+docker compose --project-directory src/app down -v
+
+# (Optional) Prune dangling images to reclaim disk
+docker image prune -f
+```
+
+For the full cloud-side teardown (EKS, Jenkins, NAT GW, ELB), see `Cleanup After Each Lab` in the `infrastructure` and `retail-store-gitops` READMEs.
+
+---
+
+## Related Repos
+
+| Repo | Role |
+|------|------|
 | [infrastructure](https://github.com/tranduyloc895/infrastructure) | Terraform + Ansible: VPC, EKS, Jenkins, ECR |
-| **retail-store-microservices** (this repo) | Source code 5 microservices + Jenkinsfile |
-| [retail-store-gitops](https://github.com/tranduyloc895/retail-store-gitops) | Manifests K8s + ArgoCD Application |
+| **retail-store-microservices** (this repo) | Source code for the 5 microservices + Jenkinsfile |
+| [retail-store-gitops](https://github.com/tranduyloc895/retail-store-gitops) | K8s manifests + ArgoCD Applications |
 
 ---
 
-> *Đồ án môn NT114 - Đại học Công nghệ Thông tin (UIT)*
+> *NT114 course project — University of Information Technology (UIT)*
 
 ## License
 
-Dựa trên [AWS Containers Retail Sample](https://github.com/aws-containers/retail-store-sample-app) — MIT-0 License.
+Based on [AWS Containers Retail Sample](https://github.com/aws-containers/retail-store-sample-app) — MIT-0 License.
