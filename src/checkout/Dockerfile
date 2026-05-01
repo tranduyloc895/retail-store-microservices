@@ -5,8 +5,10 @@ FROM node:20-alpine AS build
 
 WORKDIR /usr/src/app
 
-# Cache deps layer: chỉ invalidate khi package.json/yarn.lock đổi
-COPY package.json yarn.lock .yarnrc.yml* ./
+# Cache deps layer: chỉ invalidate khi package.json/yarn.lock/.yarn đổi
+# .yarn/releases/yarn-4.11.0.cjs phải có sẵn vì .yarnrc.yml trỏ yarnPath đến nó
+COPY package.json yarn.lock .yarnrc.yml ./
+COPY .yarn ./.yarn
 RUN corepack enable \
     && yarn install --immutable
 
