@@ -4,9 +4,12 @@
 FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS build-env
 
 # Chỉ cài gói cần thiết, bỏ qua weak deps cho image gọn nhất
+# gcc + glibc-devel cần để build go-sqlite3 (driver in-memory database mặc định) với CGO
 RUN dnf --setopt=install_weak_deps=False install -q -y \
     git \
     golang \
+    gcc \
+    glibc-devel \
     && dnf clean all
 
 WORKDIR /appsrc
@@ -19,8 +22,10 @@ RUN go mod download
 
 COPY . .
 
-# Build binary tĩnh, strip debug info để image nhỏ hơn
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o main main.go
+# CGO_ENABLED=1 vì go-sqlite3 (in-memory mode) cần liên kết với SQLite C library.
+# Binary sẽ link động với glibc → runtime image phải có glibc (amazonlinux:2023 đã có).
+# Strip debug info bằng -ldflags="-s -w" để giảm size.
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o main main.go
 
 # ============================================================
 # Stage 2: Runtime (minimal image)
