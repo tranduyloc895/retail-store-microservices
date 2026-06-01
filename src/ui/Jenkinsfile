@@ -1,16 +1,48 @@
+// =============================================================================
+// Jenkinsfile — UI service
+// =============================================================================
+// Fix theo phản hồi GVHD:
+//   [1] Token GitHub không nằm trong git URL (dùng credential helper)
+//   [2] Timeout + retry (options block)
+//   [3] when { branch 'main' } — chỉ Push/UpdateGitOps khi merge vào main
+//   [4] when { changeset } — skip stage nếu không có thay đổi trong src/ui/
+//   [5] Slack notification trong post block
+// =============================================================================
+
 pipeline {
     agent {
         label 'docker-agent'
+    }
+
+    // ---------- Options: timeout, retry, log retention ----------
+    options {
+        timeout(time: 30, unit: 'MINUTES')              // toàn pipeline tối đa 30 phút
+        timestamps()                                    // timestamp trên mỗi dòng log
+        buildDiscarder(logRotator(numToKeepStr: '15'))  // giữ 15 build cũ gần nhất
+        disableConcurrentBuilds()                       // tránh 2 build cùng pipeline chạy song song
+        ansiColor('xterm')                              // log có màu
     }
 
     environment {
         AWS_REGION    = 'ap-southeast-1'
         ECR_REPO_NAME = 'retail-store/ui'
         EKS_CLUSTER   = 'ecommerce-cluster'
+        SERVICE_NAME  = 'ui'
+        SERVICE_DIR   = 'src/ui'
     }
 
     stages {
         stage('Build Docker Image') {
+            // Chỉ build khi có thay đổi trong service dir, Dockerfile hoặc Jenkinsfile
+            when {
+                anyOf {
+                    changeset 'src/ui/**'
+                    triggeredBy 'UserIdCause'    // trigger manual luôn chạy
+                }
+            }
+            options {
+                timeout(time: 15, unit: 'MINUTES')
+            }
             steps {
                 script {
                     env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
@@ -18,7 +50,7 @@ pipeline {
                 withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
                     script {
                         env.ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-                        env.FULL_IMAGE = "${env.ECR_REGISTRY}/${ECR_REPO_NAME}:${env.IMAGE_TAG}"
+                        env.FULL_IMAGE   = "${env.ECR_REGISTRY}/${ECR_REPO_NAME}:${env.IMAGE_TAG}"
                     }
                     dir('src/ui') {
                         sh 'echo "Building: $FULL_IMAGE" && docker build -t $FULL_IMAGE .'
@@ -28,6 +60,21 @@ pipeline {
         }
 
         stage('Push to ECR') {
+            // Chỉ push ECR khi đã merge vào main (không build PR vào registry)
+            when {
+                allOf {
+                    branch 'main'
+                    not { changeRequest() }
+                    anyOf {
+                        changeset 'src/ui/**'
+                        triggeredBy 'UserIdCause'
+                    }
+                }
+            }
+            options {
+                timeout(time: 10, unit: 'MINUTES')
+                retry(3)                              // ECR push thi thoảng fail vì mạng
+            }
             steps {
                 withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
                     sh '''
@@ -41,6 +88,20 @@ pipeline {
         }
 
         stage('Update GitOps') {
+            when {
+                allOf {
+                    branch 'main'
+                    not { changeRequest() }
+                    anyOf {
+                        changeset 'src/ui/**'
+                        triggeredBy 'UserIdCause'
+                    }
+                }
+            }
+            options {
+                timeout(time: 5, unit: 'MINUTES')
+                retry(2)
+            }
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'github-gitops-token',
@@ -49,10 +110,21 @@ pipeline {
                 )]) {
                     sh '''
                         rm -rf gitops-repo
-                        git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/tranduyloc895/retail-store-gitops.git gitops-repo
+
+                        # Token KHÔNG nằm trong URL — dùng credential helper inline
+                        # để tránh leak vào .git/config của repo clone.
+                        git -c credential.helper='!f() { echo "username=$GIT_USER"; echo "password=$GIT_TOKEN"; }; f' \
+                            clone https://github.com/tranduyloc895/retail-store-gitops.git gitops-repo
+
                         cd gitops-repo
 
+                        # Set credential helper cho lần push (vẫn không lưu plaintext vào .git/config)
+                        git config credential.helper '!f() { echo "username=$GIT_USER"; echo "password=$GIT_TOKEN"; }; f'
+
                         sed -i "s|image:.*retail-store/ui.*|image: $FULL_IMAGE|" apps/ui/deployment.yml
+
+                        # Verify sed thực sự thay đổi để bắt silent-fail sớm
+                        grep -q "$FULL_IMAGE" apps/ui/deployment.yml || { echo "sed FAILED: image tag not updated"; exit 1; }
 
                         git config user.email "jenkins@ci.local"
                         git config user.name "Jenkins CI"
@@ -65,19 +137,57 @@ pipeline {
         }
     }
 
+    // ---------- POST: Slack notification + cleanup ----------
+    // Slack send wrap trong try/catch để build không fail nếu plugin chưa cài hoặc webhook chưa cấu hình.
     post {
         success {
+            script {
+                def imageInfo = env.FULL_IMAGE ?: 'N/A (no changes)'
+                def msg = "✅ *${env.JOB_NAME}* #${env.BUILD_NUMBER} SUCCESS\n" +
+                          "Service: `ui`\n" +
+                          "Image: `${imageInfo}`\n" +
+                          "<${env.BUILD_URL}|View build>"
+                try {
+                    slackSend(color: 'good', message: msg)
+                } catch (err) {
+                    echo "Slack notification skipped: ${err.message}"
+                }
+            }
             sh '''
-                echo "Pipeline SUCCESS - Image: $FULL_IMAGE"
+                echo "Pipeline SUCCESS - Image: ${FULL_IMAGE:-(no build)}"
                 echo "Service URL:"
                 kubectl get svc ui -n retail-store -o jsonpath="{.status.loadBalancer.ingress[0].hostname}" 2>/dev/null || echo "(LoadBalancer provisioning...)"
             '''
         }
         failure {
-            echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
+            script {
+                def msg = "❌ *${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED\n" +
+                          "Service: `ui`\n" +
+                          "Stage: `${env.STAGE_NAME}`\n" +
+                          "<${env.BUILD_URL}|View build log>"
+                try {
+                    slackSend(color: 'danger', message: msg)
+                } catch (err) {
+                    echo "Slack notification skipped: ${err.message}"
+                }
+                echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
+            }
+        }
+        unstable {
+            script {
+                def msg = "⚠️ *${env.JOB_NAME}* #${env.BUILD_NUMBER} UNSTABLE\n" +
+                          "Service: `ui`\n" +
+                          "Có test/scan issue, build vẫn pass.\n" +
+                          "<${env.BUILD_URL}|View build>"
+                try {
+                    slackSend(color: 'warning', message: msg)
+                } catch (err) {
+                    echo "Slack notification skipped"
+                }
+            }
         }
         always {
-            sh 'docker rmi $FULL_IMAGE || true'
+            sh 'docker rmi $FULL_IMAGE 2>/dev/null || true'
         }
     }
 }

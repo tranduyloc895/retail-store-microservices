@@ -1,16 +1,39 @@
+// =============================================================================
+// Jenkinsfile — Cart service (Java Spring Boot)
+// =============================================================================
+
 pipeline {
     agent {
         label 'docker-agent'
+    }
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '15'))
+        disableConcurrentBuilds()
+        ansiColor('xterm')
     }
 
     environment {
         AWS_REGION    = 'ap-southeast-1'
         ECR_REPO_NAME = 'retail-store/cart'
         EKS_CLUSTER   = 'ecommerce-cluster'
+        SERVICE_NAME  = 'cart'
+        SERVICE_DIR   = 'src/cart'
     }
 
     stages {
         stage('Build Docker Image') {
+            when {
+                anyOf {
+                    changeset 'src/cart/**'
+                    triggeredBy 'UserIdCause'
+                }
+            }
+            options {
+                timeout(time: 15, unit: 'MINUTES')
+            }
             steps {
                 script {
                     env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
@@ -28,6 +51,20 @@ pipeline {
         }
 
         stage('Push to ECR') {
+            when {
+                allOf {
+                    branch 'main'
+                    not { changeRequest() }
+                    anyOf {
+                        changeset 'src/cart/**'
+                        triggeredBy 'UserIdCause'
+                    }
+                }
+            }
+            options {
+                timeout(time: 10, unit: 'MINUTES')
+                retry(3)
+            }
             steps {
                 withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
                     sh '''
@@ -41,6 +78,20 @@ pipeline {
         }
 
         stage('Update GitOps') {
+            when {
+                allOf {
+                    branch 'main'
+                    not { changeRequest() }
+                    anyOf {
+                        changeset 'src/cart/**'
+                        triggeredBy 'UserIdCause'
+                    }
+                }
+            }
+            options {
+                timeout(time: 5, unit: 'MINUTES')
+                retry(2)
+            }
             steps {
                 withCredentials([usernamePassword(
                     credentialsId: 'github-gitops-token',
@@ -49,8 +100,13 @@ pipeline {
                 )]) {
                     sh '''
                         rm -rf gitops-repo
-                        git clone https://${GIT_USER}:${GIT_TOKEN}@github.com/tranduyloc895/retail-store-gitops.git gitops-repo
+
+                        git -c credential.helper='!f() { echo "username=$GIT_USER"; echo "password=$GIT_TOKEN"; }; f' \
+                            clone https://github.com/tranduyloc895/retail-store-gitops.git gitops-repo
+
                         cd gitops-repo
+
+                        git config credential.helper '!f() { echo "username=$GIT_USER"; echo "password=$GIT_TOKEN"; }; f'
 
                         sed -i "s|image:.*retail-store/cart.*|image: $FULL_IMAGE|" apps/cart/deployment.yml
                         grep -q "$FULL_IMAGE" apps/cart/deployment.yml || { echo "sed FAILED: image tag not updated"; exit 1; }
@@ -68,17 +124,52 @@ pipeline {
 
     post {
         success {
+            script {
+                def imageInfo = env.FULL_IMAGE ?: 'N/A (no changes)'
+                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} SUCCESS\n" +
+                          "Service: `cart`\n" +
+                          "Image: `${imageInfo}`\n" +
+                          "<${env.BUILD_URL}|View build>"
+                try {
+                    slackSend(color: 'good', message: msg)
+                } catch (err) {
+                    echo "Slack notification skipped: ${err.message}"
+                }
+            }
             sh '''
-                echo "Pipeline SUCCESS - Image: $FULL_IMAGE"
+                echo "Pipeline SUCCESS - Image: ${FULL_IMAGE:-(no build)}"
                 kubectl get svc cart -n retail-store -o jsonpath="{.status.loadBalancer.ingress[0].hostname}" 2>/dev/null \
                     || echo "(cart thường là ClusterIP, không có LoadBalancer)"
             '''
         }
         failure {
-            echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
+            script {
+                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED\n" +
+                          "Service: `cart`\n" +
+                          "Stage: `${env.STAGE_NAME}`\n" +
+                          "<${env.BUILD_URL}|View build log>"
+                try {
+                    slackSend(color: 'danger', message: msg)
+                } catch (err) {
+                    echo "Slack notification skipped: ${err.message}"
+                }
+                echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
+            }
+        }
+        unstable {
+            script {
+                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} UNSTABLE\n" +
+                          "Service: `cart`\n" +
+                          "<${env.BUILD_URL}|View build>"
+                try {
+                    slackSend(color: 'warning', message: msg)
+                } catch (err) {
+                    echo "Slack notification skipped"
+                }
+            }
         }
         always {
-            sh 'docker rmi $FULL_IMAGE || true'
+            sh 'docker rmi $FULL_IMAGE 2>/dev/null || true'
         }
     }
 }
