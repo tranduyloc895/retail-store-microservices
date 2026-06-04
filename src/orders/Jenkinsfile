@@ -1,13 +1,6 @@
 // =============================================================================
 // Jenkinsfile — Orders service (Java Spring Boot)
 // =============================================================================
-// Fix theo phản hồi GVHD:
-//   [1] Token GitHub không nằm trong git URL (dùng credential helper)
-//   [2] Timeout + retry (options block)
-//   [3] when { branch 'main' } — chỉ Push/UpdateGitOps khi merge vào main
-//   [4] when { changeset } — skip stage nếu không có thay đổi trong src/orders/
-//   [5] Slack notification trong post block
-// =============================================================================
 
 pipeline {
     agent {
@@ -133,7 +126,7 @@ pipeline {
         success {
             script {
                 def imageInfo = env.FULL_IMAGE ?: 'N/A (no changes)'
-                def msg = "✅ *${env.JOB_NAME}* #${env.BUILD_NUMBER} SUCCESS\n" +
+                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} SUCCESS\n" +
                           "Service: `orders`\n" +
                           "Image: `${imageInfo}`\n" +
                           "<${env.BUILD_URL}|View build>"
@@ -151,7 +144,7 @@ pipeline {
         }
         failure {
             script {
-                def msg = "❌ *${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED\n" +
+                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED\n" +
                           "Service: `orders`\n" +
                           "Stage: `${env.STAGE_NAME}`\n" +
                           "<${env.BUILD_URL}|View build log>"
@@ -165,7 +158,7 @@ pipeline {
         }
         unstable {
             script {
-                def msg = "⚠️ *${env.JOB_NAME}* #${env.BUILD_NUMBER} UNSTABLE\n" +
+                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} UNSTABLE\n" +
                           "Service: `orders`\n" +
                           "<${env.BUILD_URL}|View build>"
                 try {
