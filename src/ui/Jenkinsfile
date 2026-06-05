@@ -133,7 +133,7 @@ pipeline {
                           "<${env.BUILD_URL}|View build>"
                 try {
                     slackSend(color: 'good', message: msg)
-                } catch (err) {
+                } catch (Throwable err) {
                     echo "Slack notification skipped: ${err.message}"
                 }
             }
@@ -151,7 +151,7 @@ pipeline {
                           "<${env.BUILD_URL}|View build log>"
                 try {
                     slackSend(color: 'danger', message: msg)
-                } catch (err) {
+                } catch (Throwable err) {
                     echo "Slack notification skipped: ${err.message}"
                 }
                 echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
@@ -165,7 +165,7 @@ pipeline {
                           "<${env.BUILD_URL}|View build>"
                 try {
                     slackSend(color: 'warning', message: msg)
-                } catch (err) {
+                } catch (Throwable err) {
                     echo "Slack notification skipped"
                 }
             }
