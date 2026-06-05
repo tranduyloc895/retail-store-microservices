@@ -108,8 +108,8 @@ pipeline {
 
                         git config credential.helper '!f() { echo "username=$GIT_USER"; echo "password=$GIT_TOKEN"; }; f'
 
-                        sed -i "s|^\([[:space:]]*tag:\s*\).*|\1\"$IMAGE_TAG\"|" apps/checkout/values.yaml
-                        grep -q "tag: \"$IMAGE_TAG\"" apps/checkout/values.yaml || { echo "sed FAILED: image tag not updated"; exit 1; }
+                        sed -i "s|^  tag:.*|  tag: \\"$IMAGE_TAG\\"|" apps/checkout/values.yaml
+                        grep -q "tag: \\"$IMAGE_TAG\\"" apps/checkout/values.yaml || { echo "sed FAILED: image tag not updated"; exit 1; }
 
                         git config user.email "jenkins@ci.local"
                         git config user.name  "Jenkins CI"
