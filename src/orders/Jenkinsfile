@@ -52,7 +52,12 @@ pipeline {
                             --format json \
                             --output reports/trivy-fs-${IMAGE_TAG}.json \
                             .
-                        python - <<'PY'
+                        PYTHON_CMD=$(command -v python3 || command -v python)
+                        if [ -z "$PYTHON_CMD" ]; then
+                            echo "Python is required for report generation" >&2
+                            exit 1
+                        fi
+                        $PYTHON_CMD - <<'PY'
 import json, html, os, pathlib
 service = os.environ.get('SERVICE_NAME', 'service')
 tag = os.environ['IMAGE_TAG']
@@ -178,7 +183,12 @@ PY
                         --format json \
                         --output reports/trivy-image-${IMAGE_TAG}.json \
                         $FULL_IMAGE
-                    python - <<'PY'
+                    PYTHON_CMD=$(command -v python3 || command -v python)
+                    if [ -z "$PYTHON_CMD" ]; then
+                        echo "Python is required for report generation" >&2
+                        exit 1
+                    fi
+                    $PYTHON_CMD - <<'PY'
 import json, html, os, pathlib
 service = os.environ.get('SERVICE_NAME', 'service')
 tag = os.environ['IMAGE_TAG']
