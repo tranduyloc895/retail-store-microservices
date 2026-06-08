@@ -49,101 +49,13 @@ pipeline {
                             --severity HIGH,CRITICAL \
                             --exit-code 0 \
                             --no-progress \
-                            --format json \
-                            --output reports/trivy-fs-${IMAGE_TAG}.json \
+                            --format table \
+                            --output reports/trivy-fs-${IMAGE_TAG}.txt \
                             .
-                        PYTHON_CMD=$(command -v python3 || command -v python)
-                        if [ -z "$PYTHON_CMD" ]; then
-                            echo "Python is required for report generation" >&2
-                            exit 1
-                        fi
-                        $PYTHON_CMD - <<'PY'
-import json, html, os, pathlib
-service = os.environ.get('SERVICE_NAME', 'service')
-tag = os.environ['IMAGE_TAG']
-report_json = pathlib.Path('reports') / f'trivy-fs-{tag}.json'
-report_html = pathlib.Path('reports') / f'trivy-fs-{tag}.html'
-data = json.loads(report_json.read_text(encoding='utf-8'))
-severity_styles = {
-    'CRITICAL': '#d32f2f',
-    'HIGH': '#f57c00',
-    'MEDIUM': '#1976d2',
-    'LOW': '#388e3c',
-    'UNKNOWN': '#616161'
-}
-rows = []
-counts = {}
-for result in data.get('Results', []):
-    target = result.get('Target', '')
-    for vuln in result.get('Vulnerabilities', []) or []:
-        sev = vuln.get('Severity', 'UNKNOWN')
-        counts[sev] = counts.get(sev, 0) + 1
-        refs = vuln.get('References', []) or []
-        ref_html = '<br>'.join(f'<a href="{html.escape(r)}">{html.escape(r)}</a>' for r in refs)
-        rows.append(f"""<tr>
-<td>{html.escape(target)}</td>
-<td>{html.escape(vuln.get('VulnerabilityID', ''))}</td>
-<td>{html.escape(vuln.get('PkgName', ''))}</td>
-<td>{html.escape(vuln.get('InstalledVersion', ''))}</td>
-<td>{html.escape(vuln.get('FixedVersion', ''))}</td>
-<td style="background:{severity_styles.get(sev, '#888')};color:#fff;text-align:center">{html.escape(sev)}</td>
-<td>{html.escape(vuln.get('Title', ''))}</td>
-<td>{html.escape(vuln.get('Description', ''))}</td>
-<td>{ref_html}</td>
-</tr>""")
-summary_cells = ''.join(f'<td style="padding: 0.5rem; background:{severity_styles.get(sev, "#888")}; color:#fff; text-align:center;">{html.escape(sev)}: {count}</td>' for sev, count in sorted(counts.items(), key=lambda x: ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'].index(x[0]) if x[0] in ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'] else 5))
-if not rows:
-    rows_html = '<tr><td colspan="9" style="text-align:center;padding:1rem;">No vulnerabilities found.</td></tr>'
-else:
-    rows_html = '\n'.join(rows)
-summary_html = f'<tr>{summary_cells}</tr>' if counts else '<tr><td colspan="9" style="text-align:center;padding:1rem;">No vulnerabilities found.</td></tr>'
-html_content = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<title>Trivy FS Report - {html.escape(service)} - {html.escape(tag)}</title>
-<style>
-body {{ font-family: Arial, sans-serif; margin: 0; padding: 1.5rem; background: #f4f6f8; color: #212121; }}
-header {{ margin-bottom: 1.5rem; }}
-h1 {{ margin: 0; font-size: 1.8rem; }}
-section.summary {{ margin-bottom: 1rem; }}
-table {{ width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 0 12px rgba(0,0,0,0.05); }}
-th, td {{ padding: 0.75rem 0.9rem; border-bottom: 1px solid #e0e0e0; text-align: left; }}
-th {{ background: #1976d2; color: white; position: sticky; top: 0; }}
-tr:nth-child(even) {{ background: #fafafa; }}
-pre {{ white-space: pre-wrap; word-wrap: break-word; margin: 0; }}
-small {{ color: #616161; }}
-</style>
-</head>
-<body>
-<header>
-<h1>Trivy FS Scan Report</h1>
-<p><strong>Service:</strong> {html.escape(service)} &nbsp; | &nbsp; <strong>Image Tag:</strong> {html.escape(tag)}</p>
-</header>
-<section class="summary">
-<table>
-<thead><tr><th colspan="9">Severity summary</th></tr></thead>
-<tbody>{summary_html}</tbody>
-</table>
-</section>
-<section>
-<table>
-<thead>
-<tr>
-<th>Target</th><th>ID</th><th>Package</th><th>Installed</th><th>Fixed</th><th>Severity</th><th>Title</th><th>Description</th><th>References</th>
-</tr>
-</thead>
-<tbody>
-{rows_html}
-</tbody>
-</table>
-</section>
-</body>
-</html>"""
-report_html.write_text(html_content, encoding='utf-8')
-PY
+                        echo "===== Trivy filesystem scan ====="
+                        cat reports/trivy-fs-${IMAGE_TAG}.txt
                     '''
-                    archiveArtifacts artifacts: 'reports/trivy-fs-*.html', fingerprint: true
+                    archiveArtifacts artifacts: 'reports/trivy-fs-*.txt', fingerprint: true
                 }
             }
         }
@@ -182,99 +94,13 @@ PY
                         --severity HIGH,CRITICAL \
                         --exit-code 0 \
                         --no-progress \
-                        --format json \
-                        --output reports/trivy-image-${IMAGE_TAG}.json \
+                        --format table \
+                        --output reports/trivy-image-${IMAGE_TAG}.txt \
                         $FULL_IMAGE
-                    PYTHON_CMD=$(command -v python3 || command -v python)
-                    if [ -z "$PYTHON_CMD" ]; then
-                        echo "Python is required for report generation" >&2
-                        exit 1
-                    fi
-                    $PYTHON_CMD - <<'PY'
-import json, html, os, pathlib
-service = os.environ.get('SERVICE_NAME', 'service')
-tag = os.environ['IMAGE_TAG']
-report_json = pathlib.Path('reports') / f'trivy-image-{tag}.json'
-report_html = pathlib.Path('reports') / f'trivy-image-{tag}.html'
-data = json.loads(report_json.read_text(encoding='utf-8'))
-severity_styles = {
-    'CRITICAL': '#d32f2f',
-    'HIGH': '#f57c00',
-    'MEDIUM': '#1976d2',
-    'LOW': '#388e3c',
-    'UNKNOWN': '#616161'
-}
-rows = []
-counts = {}
-for result in data.get('Results', []):
-    target = result.get('Target', '')
-    for vuln in result.get('Vulnerabilities', []) or []:
-        sev = vuln.get('Severity', 'UNKNOWN')
-        counts[sev] = counts.get(sev, 0) + 1
-        refs = vuln.get('References', []) or []
-        ref_html = '<br>'.join(f'<a href="{html.escape(r)}">{html.escape(r)}</a>' for r in refs)
-        rows.append(f"""<tr>
-<td>{html.escape(target)}</td>
-<td>{html.escape(vuln.get('VulnerabilityID', ''))}</td>
-<td>{html.escape(vuln.get('PkgName', ''))}</td>
-<td>{html.escape(vuln.get('InstalledVersion', ''))}</td>
-<td>{html.escape(vuln.get('FixedVersion', ''))}</td>
-<td style="background:{severity_styles.get(sev, '#888')};color:#fff;text-align:center">{html.escape(sev)}</td>
-<td>{html.escape(vuln.get('Title', ''))}</td>
-<td>{html.escape(vuln.get('Description', ''))}</td>
-<td>{ref_html}</td>
-</tr>""")
-summary_cells = ''.join(f'<td style="padding: 0.5rem; background:{severity_styles.get(sev, "#888")}; color:#fff; text-align:center;">{html.escape(sev)}: {count}</td>' for sev, count in sorted(counts.items(), key=lambda x: ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'].index(x[0]) if x[0] in ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'] else 5))
-if not rows:
-    rows_html = '<tr><td colspan="9" style="text-align:center;padding:1rem;">No vulnerabilities found.</td></tr>'
-else:
-    rows_html = '\n'.join(rows)
-summary_html = f'<tr>{summary_cells}</tr>' if counts else '<tr><td colspan="9" style="text-align:center;padding:1rem;">No vulnerabilities found.</td></tr>'
-html_content = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<title>Trivy Image Report - {html.escape(service)} - {html.escape(tag)}</title>
-<style>
-body {{ font-family: Arial, sans-serif; margin: 0; padding: 1.5rem; background: #f4f6f8; color: #212121; }}
-header {{ margin-bottom: 1.5rem; }}
-h1 {{ margin: 0; font-size: 1.8rem; }}
-section.summary {{ margin-bottom: 1rem; }}
-table {{ width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 0 12px rgba(0,0,0,0.05); }}
-th, td {{ padding: 0.75rem 0.9rem; border-bottom: 1px solid #e0e0e0; text-align: left; }}
-th {{ background: #1976d2; color: white; position: sticky; top: 0; }}
-tr:nth-child(even) {{ background: #fafafa; }}
-</style>
-</head>
-<body>
-<header>
-<h1>Trivy Image Scan Report</h1>
-<p><strong>Service:</strong> {html.escape(service)} &nbsp; | &nbsp; <strong>Image Tag:</strong> {html.escape(tag)}</p>
-</header>
-<section class="summary">
-<table>
-<thead><tr><th colspan="9">Severity summary</th></tr></thead>
-<tbody>{summary_html}</tbody>
-</table>
-</section>
-<section>
-<table>
-<thead>
-<tr>
-<th>Target</th><th>ID</th><th>Package</th><th>Installed</th><th>Fixed</th><th>Severity</th><th>Title</th><th>Description</th><th>References</th>
-</tr>
-</thead>
-<tbody>
-{rows_html}
-</tbody>
-</table>
-</section>
-</body>
-</html>"""
-report_html.write_text(html_content, encoding='utf-8')
-PY
-                    '''
-                archiveArtifacts artifacts: 'reports/trivy-image-*.html', fingerprint: true
+                    echo "===== Trivy image scan ====="
+                    cat reports/trivy-image-${IMAGE_TAG}.txt
+                '''
+                archiveArtifacts artifacts: 'reports/trivy-image-*.txt', fingerprint: true
             }
         }
         
