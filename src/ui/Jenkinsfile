@@ -35,7 +35,7 @@ pipeline {
         stage('Prepare Maven cache') {
             steps {
                 dir('src/ui') {
-                    sh './mvnw -B dependency:resolve'
+                    sh 'chmod +x ./mvnw && ./mvnw -B dependency:resolve'
                 }
             }
         }
