@@ -24,6 +24,22 @@ pipeline {
     }
 
     stages {
+        stage('Set IMAGE_TAG') {
+            steps {
+                script {
+                    env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                }
+            }
+        }
+
+        stage('Prepare Maven cache') {
+            steps {
+                dir('src/ui') {
+                    sh './mvnw -B dependency:resolve'
+                }
+            }
+        }
+
         stage('Trivy fs scan') {
             steps {
                 dir('src/ui') {
@@ -39,6 +55,7 @@ pipeline {
                         echo "===== Trivy filesystem scan ====="
                         cat reports/trivy-fs-${IMAGE_TAG}.txt
                     '''
+                    archiveArtifacts artifacts: 'reports/trivy-fs-*.txt', fingerprint: true
                 }
             }
         }

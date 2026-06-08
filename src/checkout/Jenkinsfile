@@ -24,6 +24,14 @@ pipeline {
     }
 
     stages {
+        stage('Set IMAGE_TAG') {
+            steps {
+                script {
+                    env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                }
+            }
+        }
+
         stage('Trivy fs scan') {
             steps {
                 dir('src/checkout') {
@@ -39,6 +47,7 @@ pipeline {
                         echo "===== Trivy filesystem scan ====="
                         cat reports/trivy-fs-${IMAGE_TAG}.txt
                     '''
+                    archiveArtifacts artifacts: 'reports/trivy-fs-*.txt', fingerprint: true
                 }
             }
         }
