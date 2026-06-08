@@ -159,7 +159,7 @@ Jenkins Agent triggers the pipeline
         │
         └─── Stage 3: Update GitOps
                 • git clone retail-store-gitops
-                • sed replaces the image tag in apps/<service>/deployment.yml
+                • sed replaces the image tag in apps/<service>/values.yaml
                 • git commit + push to main
                         │
                         ▼
@@ -215,36 +215,32 @@ pipeline {
 | `aws-account-id` | Secret text | AWS Account ID (used during ECR login) |
 | `jenkins-agent-ssh` | SSH Username with private key | Master connects to the Agent over SSH |
 | `github-gitops-token` | Username with password | Jenkins pushes manifest changes to `retail-store-gitops` |
+| `github-scan-token` | Username with password | Multibranch job scans this repo via the GitHub API (avoids the 60 req/h anonymous rate limit) |
 
-**GitHub token permissions** (least-privilege):
+**`github-gitops-token` permissions** (least-privilege):
 - Repository: only `retail-store-gitops`
 - Permissions: **Contents: Read and write** + **Metadata: Read** (required automatically)
 - Do not grant Administration, Secrets, Webhooks, Actions, or any other permission.
 
-### Pipeline job setup in Jenkins
+**`github-scan-token` permissions:** read access to **this** repo (`retail-store-microservices`). It is public, so a token with **no scopes** is enough to lift the rate limit to 5000 req/h.
 
-- **Type:** Pipeline
-- **Pipeline definition:** Pipeline script from SCM
-- **SCM:** Git
-- **Repository URL:** `<URL of this repo>`
-- **Branch:** `*/main`
-- **Script Path:** `src/<service>/Jenkinsfile` (one job per service)
+### Pipeline job setup in Jenkins (Multibranch)
+
+The Jenkinsfile gates the Push/Update stages with `when { branch 'main'; not changeRequest() }`. Those read `BRANCH_NAME` / `CHANGE_ID`, which Jenkins **only sets for Multibranch Pipeline jobs** — so a plain "Pipeline script from SCM" job skips those stages forever. Use **Multibranch Pipeline**.
+
+Create **one job per service** (5 total), differing only in name + Script Path:
+
+- **Type:** Multibranch Pipeline
+- **Branch Sources:** GitHub → Credentials `github-scan-token`, Repository URL `<URL of this repo>`
+- **Build Configuration:** by Jenkinsfile → Script Path `src/<service>/Jenkinsfile`
+- **Scan Repository Triggers:** ☑ Periodically if not otherwise run → 1 minute (Jenkins is private, no webhook yet)
+- *(Optional)* Branch Sources → GitHub → Add behaviour → **Disable GitHub Notifications** (silences the harmless `403 Could not update commit status` log line)
+
+> **⚠️ First build of a branch is skipped by design.** The initial auto-scan build is triggered by *branch indexing* (not a user) and has no previous build to diff, so `triggeredBy 'UserIdCause'` and `changeset 'src/<svc>/**'` are both false → all stages skip. **Open the `main` sub-job and click Build Now** for the first real deploy. From the 2nd commit onward, pushes touching `src/<svc>/**` trigger automatically.
 
 ### Automatic trigger (roadmap)
 
-Currently the pipeline is triggered manually (click "Build Now"). To automate:
-
-**Option A — GitHub webhook → Jenkins:**
-1. Jenkins needs a public URL (the current port-forward is local only).
-2. In the GitHub repo → Settings → Webhooks → add `https://<jenkins-url>/github-webhook/`.
-3. Configure the pipeline: `triggers { githubPush() }`.
-
-**Option B — SCM polling** (simpler, no need to expose Jenkins):
-```groovy
-triggers {
-    pollSCM('H/5 * * * *')  // check the repo every 5 minutes
-}
-```
+New commits are picked up by the **periodic repo scan** (1 minute) configured above. To make it fully event-driven, add a **GitHub webhook** (`https://<jenkins-url>/github-webhook/`) once Jenkins has a public URL — with a Multibranch + GitHub Branch Source job, pushes then trigger scans/builds instantly (no `triggers {}` block needed in the Jenkinsfile).
 
 ---
 
