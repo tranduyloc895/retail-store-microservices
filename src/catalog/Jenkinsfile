@@ -41,13 +41,14 @@ pipeline {
                             --severity HIGH,CRITICAL \
                             --exit-code 0 \
                             --no-progress \
-                            --format table \
-                            --output reports/trivy-fs-${IMAGE_TAG}.txt \
+                            --format template \
+                            --template "@contrib/html.tpl" \
+                            --output reports/trivy-fs-${IMAGE_TAG}.html \
                             .
-                        echo "===== Trivy filesystem scan ====="
-                        cat reports/trivy-fs-${IMAGE_TAG}.txt
+                        echo "===== Trivy filesystem scan completed ====="
+                        echo "Report: reports/trivy-fs-${IMAGE_TAG}.html"
                     '''
-                    archiveArtifacts artifacts: 'reports/trivy-fs-*.txt', fingerprint: true
+                    archiveArtifacts artifacts: 'reports/trivy-fs-*.html', fingerprint: true
                 }
             }
         }
@@ -86,13 +87,14 @@ pipeline {
                         --severity HIGH,CRITICAL \
                         --exit-code 0 \
                         --no-progress \
-                        --format table \
-                        --output reports/trivy-image-${IMAGE_TAG}.txt \
+                        --format template \
+                        --template "@contrib/html.tpl" \
+                        --output reports/trivy-image-${IMAGE_TAG}.html \
                         $FULL_IMAGE
-                    echo "===== Trivy image scan ====="
-                    cat reports/trivy-image-${IMAGE_TAG}.txt
+                    echo "===== Trivy image scan completed ====="
+                    echo "Report: reports/trivy-image-${IMAGE_TAG}.html"
                 '''
-                archiveArtifacts artifacts: 'reports/trivy-image-*.txt', fingerprint: true
+                archiveArtifacts artifacts: 'reports/trivy-image-*.html', fingerprint: true
             }
         }
         
