@@ -37,17 +37,22 @@ pipeline {
                 dir('src/catalog') {
                     sh '''
                         mkdir -p reports
-                        trivy fs \
-                            --severity HIGH,CRITICAL \
-                            --exit-code 0 \
-                            --no-progress \
-                            --format table \
-                            --output reports/trivy-fs-${IMAGE_TAG}.txt \
-                            .
+
+                        # Locate the Trivy HTML template (installed via apt) or download a fallback copy
+                        TPL=/usr/local/share/trivy/templates/html.tpl
+                        if [ ! -f "$TPL" ]; then
+                            curl -sSL -o reports/html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
+                            TPL=reports/html.tpl
+                        fi
+
+                        # Same scan exported as console table (.txt) and HTML report (.html)
+                        trivy fs --severity HIGH,CRITICAL --exit-code 0 --no-progress --format table --output reports/trivy-fs-${IMAGE_TAG}.txt .
+                        trivy fs --severity HIGH,CRITICAL --exit-code 0 --no-progress --format template --template @$TPL --output reports/trivy-fs-${IMAGE_TAG}.html .
+
                         echo "===== Trivy filesystem scan ====="
                         cat reports/trivy-fs-${IMAGE_TAG}.txt
                     '''
-                    archiveArtifacts artifacts: 'reports/trivy-fs-*.txt', fingerprint: true
+                    archiveArtifacts artifacts: 'reports/trivy-fs-*.txt,reports/trivy-fs-*.html', fingerprint: true
                 }
             }
         }
@@ -82,17 +87,22 @@ pipeline {
             steps {
                 sh '''
                     mkdir -p reports
-                    trivy image \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 0 \
-                        --no-progress \
-                        --format table \
-                        --output reports/trivy-image-${IMAGE_TAG}.txt \
-                        $FULL_IMAGE
+
+                    # Locate the Trivy HTML template (installed via apt) or download a fallback copy
+                    TPL=/usr/local/share/trivy/templates/html.tpl
+                    if [ ! -f "$TPL" ]; then
+                        curl -sSL -o reports/html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
+                        TPL=reports/html.tpl
+                    fi
+
+                    # Same scan exported as console table (.txt) and HTML report (.html)
+                    trivy image --severity HIGH,CRITICAL --exit-code 0 --no-progress --format table --output reports/trivy-image-${IMAGE_TAG}.txt $FULL_IMAGE
+                    trivy image --severity HIGH,CRITICAL --exit-code 0 --no-progress --format template --template @$TPL --output reports/trivy-image-${IMAGE_TAG}.html $FULL_IMAGE
+
                     echo "===== Trivy image scan ====="
                     cat reports/trivy-image-${IMAGE_TAG}.txt
                 '''
-                archiveArtifacts artifacts: 'reports/trivy-image-*.txt', fingerprint: true
+                archiveArtifacts artifacts: 'reports/trivy-image-*.txt,reports/trivy-image-*.html', fingerprint: true
             }
         }
         
