@@ -81,7 +81,7 @@ for result in data.get('Results', []):
 <td>{html.escape(vuln.get('PkgName', ''))}</td>
 <td>{html.escape(vuln.get('InstalledVersion', ''))}</td>
 <td>{html.escape(vuln.get('FixedVersion', ''))}</td>
-<td style=\"background:{severity_styles.get(sev, '#888')}\;color:#fff;text-align:center\">{html.escape(sev)}</td>
+<td style="background:{severity_styles.get(sev, '#888')};color:#fff;text-align:center">{html.escape(sev)}</td>
 <td>{html.escape(vuln.get('Title', ''))}</td>
 <td>{html.escape(vuln.get('Description', ''))}</td>
 <td>{ref_html}</td>
@@ -209,7 +209,7 @@ for result in data.get('Results', []):
 <td>{html.escape(vuln.get('PkgName', ''))}</td>
 <td>{html.escape(vuln.get('InstalledVersion', ''))}</td>
 <td>{html.escape(vuln.get('FixedVersion', ''))}</td>
-<td style=\"background:{severity_styles.get(sev, '#888')}\;color:#fff;text-align:center\">{html.escape(sev)}</td>
+<td style="background:{severity_styles.get(sev, '#888')};color:#fff;text-align:center">{html.escape(sev)}</td>
 <td>{html.escape(vuln.get('Title', ''))}</td>
 <td>{html.escape(vuln.get('Description', ''))}</td>
 <td>{ref_html}</td>
