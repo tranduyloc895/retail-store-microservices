@@ -10,6 +10,25 @@ pipeline {
     }
 
     stages {
+        stage('Trivy fs scan') {
+            steps {
+                dir('src/ui') {
+                    sh '''
+                        mkdir -p reports
+                        trivy fs \
+                            --severity HIGH,CRITICAL \
+                            --exit-code 0 \
+                            --no-progress \
+                            --format table \
+                            --output reports/trivy-fs-${IMAGE_TAG}.txt \
+                            .
+                        echo "===== Trivy filesystem scan ====="
+                        cat reports/trivy-fs-${IMAGE_TAG}.txt
+                    '''
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 script {
@@ -27,6 +46,24 @@ pipeline {
             }
         }
 
+        stage('Trivy image scan') {
+            steps {
+                sh '''
+                    mkdir -p reports
+                    trivy image \
+                        --severity HIGH,CRITICAL \
+                        --exit-code 0 \
+                        --no-progress \
+                        --format table \
+                        --output reports/trivy-image-${IMAGE_TAG}.txt \
+                        $FULL_IMAGE
+                    echo "===== Trivy image scan ====="
+                    cat reports/trivy-image-${IMAGE_TAG}.txt
+                '''
+                archiveArtifacts artifacts: 'reports/trivy-image-*.txt', fingerprint: true
+            }
+        }
+        
         stage('Push to ECR') {
             steps {
                 withCredentials([string(credentialsId: 'aws-account-id', variable: 'AWS_ACCOUNT_ID')]) {
