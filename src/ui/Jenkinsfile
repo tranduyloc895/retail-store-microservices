@@ -75,7 +75,7 @@ for result in data.get('Results', []):
         counts[sev] = counts.get(sev, 0) + 1
         refs = vuln.get('References', []) or []
         ref_html = '<br>'.join(f'<a href="{html.escape(r)}">{html.escape(r)}</a>' for r in refs)
-        rows.append(f'''<tr>
+        rows.append(f"""<tr>
 <td>{html.escape(target)}</td>
 <td>{html.escape(vuln.get('VulnerabilityID', ''))}</td>
 <td>{html.escape(vuln.get('PkgName', ''))}</td>
@@ -85,7 +85,7 @@ for result in data.get('Results', []):
 <td>{html.escape(vuln.get('Title', ''))}</td>
 <td>{html.escape(vuln.get('Description', ''))}</td>
 <td>{ref_html}</td>
-</tr>''')
+</tr>""")
 summary_cells = ''.join(f'<td style="padding: 0.5rem; background:{severity_styles.get(sev, "#888")}; color:#fff; text-align:center;">{html.escape(sev)}: {count}</td>' for sev, count in sorted(counts.items(), key=lambda x: ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'].index(x[0]) if x[0] in ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'] else 5))
 if not rows:
     rows_html = '<tr><td colspan="9" style="text-align:center;padding:1rem;">No vulnerabilities found.</td></tr>'
@@ -203,17 +203,17 @@ for result in data.get('Results', []):
         counts[sev] = counts.get(sev, 0) + 1
         refs = vuln.get('References', []) or []
         ref_html = '<br>'.join(f'<a href="{html.escape(r)}">{html.escape(r)}</a>' for r in refs)
-        rows.append(f'''<tr>
+        rows.append(f"""<tr>
 <td>{html.escape(target)}</td>
 <td>{html.escape(vuln.get('VulnerabilityID', ''))}</td>
 <td>{html.escape(vuln.get('PkgName', ''))}</td>
 <td>{html.escape(vuln.get('InstalledVersion', ''))}</td>
 <td>{html.escape(vuln.get('FixedVersion', ''))}</td>
-<td style=\"background:{severity_styles.get(sev, '#888')};color:#fff;text-align:center\">{html.escape(sev)}</td>
+<td style=\"background:{severity_styles.get(sev, '#888')}\;color:#fff;text-align:center\">{html.escape(sev)}</td>
 <td>{html.escape(vuln.get('Title', ''))}</td>
 <td>{html.escape(vuln.get('Description', ''))}</td>
 <td>{ref_html}</td>
-</tr>''')
+</tr>""")
 summary_cells = ''.join(f'<td style="padding: 0.5rem; background:{severity_styles.get(sev, "#888")}; color:#fff; text-align:center;">{html.escape(sev)}: {count}</td>' for sev, count in sorted(counts.items(), key=lambda x: ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'].index(x[0]) if x[0] in ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'] else 5))
 if not rows:
     rows_html = '<tr><td colspan="9" style="text-align:center;padding:1rem;">No vulnerabilities found.</td></tr>'
