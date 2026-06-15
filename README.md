@@ -13,6 +13,7 @@ Source code for the microservices of the **DevSecOps E-commerce** project (NT114
 - [Directory Structure](#directory-structure)
 - [Run Locally with Docker Compose](#run-locally-with-docker-compose)
 - [CI/CD Pipeline (Jenkins + GitOps)](#cicd-pipeline-jenkins--gitops)
+- [Build Notifications (Telegram)](#build-notifications-telegram)
 - [Build Each Service](#build-each-service)
 - [Pipeline Onboarding Status](#pipeline-onboarding-status)
 - [Cleanup After Each Lab](#cleanup-after-each-lab)
@@ -216,6 +217,8 @@ pipeline {
 | `jenkins-agent-ssh` | SSH Username with private key | Master connects to the Agent over SSH |
 | `github-gitops-token` | Username with password | Jenkins pushes manifest changes to `retail-store-gitops` |
 | `github-scan-token` | Username with password | Multibranch job scans this repo via the GitHub API (avoids the 60 req/h anonymous rate limit) |
+| `telegram-bot-token` | Secret text | Telegram Bot API token (from BotFather) — build notifications |
+| `telegram-chat-id` | Secret text | Telegram chat/channel ID the bot posts to (a group id is negative) |
 
 **`github-gitops-token` permissions** (least-privilege):
 - Repository: only `retail-store-gitops`
@@ -241,6 +244,35 @@ Create **one job per service** (5 total), differing only in name + Script Path:
 ### Automatic trigger (roadmap)
 
 New commits are picked up by the **periodic repo scan** (1 minute) configured above. To make it fully event-driven, add a **GitHub webhook** (`https://<jenkins-url>/github-webhook/`) once Jenkins has a public URL — with a Multibranch + GitHub Branch Source job, pushes then trigger scans/builds instantly (no `triggers {}` block needed in the Jenkinsfile).
+
+### Build notifications (Telegram)
+
+Every build reports its result to **Telegram** from the Jenkinsfile `post` block (this replaced an earlier Slack integration). Delivery is best-effort — a send error is caught and never fails the build. Telegram fits the private-subnet Jenkins well because it is a plain **outbound** HTTPS call (no inbound webhook needed).
+
+Each build sends:
+- A **summary message**: result (SUCCESS / FAILURE / UNSTABLE), service, image tag, and — on success — a **Trivy scan summary** (HIGH / CRITICAL counts for both the filesystem and image scans).
+- On success, the two **Trivy HTML reports** as file attachments (Telegram `sendDocument`).
+
+Three Groovy helpers at the top of each `src/<service>/Jenkinsfile` implement this:
+
+| Helper | Role |
+|--------|------|
+| `notifyTelegram(text)` | Send a message (`sendMessage`, HTML parse mode); message passed via env var to avoid shell injection |
+| `sendTelegramDoc(file, caption)` | Attach a file (`sendDocument`); skips silently if the file is missing |
+| `countSeverity(json, severity)` | Count HIGH/CRITICAL findings from the Trivy JSON output — uses `grep` (no `jq` dependency) |
+
+Example success message (plus two attached files `trivy-fs-<tag>.html`, `trivy-image-<tag>.html`):
+
+```
+✅ ui-pipeline/main #6 — SUCCESS
+Service: ui
+Image: <ECR>/retail-store/ui:eafeee6
+Trivy fs: HIGH=21 CRIT=6
+Trivy image: HIGH=29 CRIT=6
+View build
+```
+
+> Setup: create the `telegram-bot-token` and `telegram-chat-id` credentials (see the table above). Get the chat id by messaging the bot once, then reading `chat.id` from `https://api.telegram.org/bot<TOKEN>/getUpdates`.
 
 ---
 
