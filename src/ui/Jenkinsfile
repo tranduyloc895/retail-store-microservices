@@ -1,6 +1,41 @@
 // =============================================================================
 // Jenkinsfile — UI service
 
+// ---------- Telegram notification helper ----------
+// Gửi message qua Telegram Bot API (outbound HTTPS, hợp với Jenkins private-subnet).
+// Token + chat_id lưu trong Jenkins credentials (Secret text). Best-effort:
+// lỗi gửi KHÔNG làm fail build.
+def notifyTelegram(String text) {
+    try {
+        withCredentials([
+            string(credentialsId: 'telegram-bot-token', variable: 'TG_TOKEN'),
+            string(credentialsId: 'telegram-chat-id',   variable: 'TG_CHAT')
+        ]) {
+            withEnv(["TG_TEXT=${text}"]) {
+                sh '''
+                    curl -s --max-time 15 -X POST \
+                        "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+                        -d chat_id="${TG_CHAT}" \
+                        -d parse_mode=HTML \
+                        -d disable_web_page_preview=true \
+                        --data-urlencode text="${TG_TEXT}" > /dev/null
+                '''
+            }
+        }
+    } catch (Throwable err) {
+        echo "Telegram notification skipped: ${err.message}"
+    }
+}
+
+// Đếm số finding theo severity trong file JSON của Trivy (không phụ thuộc jq;
+// dùng grep nên thiếu file/không khớp đều trả về 0, không làm fail build).
+def countSeverity(String jsonFile, String severity) {
+    return sh(
+        script: "grep -oE '\"Severity\"[[:space:]]*:[[:space:]]*\"${severity}\"' '${jsonFile}' 2>/dev/null | wc -l | tr -d ' '",
+        returnStdout: true
+    ).trim()
+}
+
 pipeline {
     agent {
         label 'docker-agent'
@@ -53,14 +88,19 @@ pipeline {
                             TPL=reports/html.tpl
                         fi
 
-                        # Same scan exported as console table (.txt) and HTML report (.html)
+                        # Same scan exported as console table (.txt), HTML report (.html) and JSON (for counts)
                         trivy fs --severity HIGH,CRITICAL --exit-code 0 --no-progress --format table --output reports/trivy-fs-${IMAGE_TAG}.txt .
                         trivy fs --severity HIGH,CRITICAL --exit-code 0 --no-progress --format template --template @$TPL --output reports/trivy-fs-${IMAGE_TAG}.html .
+                        trivy fs --severity HIGH,CRITICAL --exit-code 0 --no-progress --format json --output reports/trivy-fs-${IMAGE_TAG}.json .
 
                         echo "===== Trivy filesystem scan ====="
                         cat reports/trivy-fs-${IMAGE_TAG}.txt
                     '''
                     archiveArtifacts artifacts: 'reports/trivy-fs-*.txt,reports/trivy-fs-*.html', fingerprint: true
+                }
+                script {
+                    env.FS_HIGH = countSeverity("src/ui/reports/trivy-fs-${env.IMAGE_TAG}.json", "HIGH")
+                    env.FS_CRIT = countSeverity("src/ui/reports/trivy-fs-${env.IMAGE_TAG}.json", "CRITICAL")
                 }
             }
         }
@@ -103,14 +143,19 @@ pipeline {
                         TPL=reports/html.tpl
                     fi
 
-                    # Same scan exported as console table (.txt) and HTML report (.html)
+                    # Same scan exported as console table (.txt), HTML report (.html) and JSON (for counts)
                     trivy image --severity HIGH,CRITICAL --exit-code 0 --no-progress --format table --output reports/trivy-image-${IMAGE_TAG}.txt $FULL_IMAGE
                     trivy image --severity HIGH,CRITICAL --exit-code 0 --no-progress --format template --template @$TPL --output reports/trivy-image-${IMAGE_TAG}.html $FULL_IMAGE
+                    trivy image --severity HIGH,CRITICAL --exit-code 0 --no-progress --format json --output reports/trivy-image-${IMAGE_TAG}.json $FULL_IMAGE
 
                     echo "===== Trivy image scan ====="
                     cat reports/trivy-image-${IMAGE_TAG}.txt
                 '''
                 archiveArtifacts artifacts: 'reports/trivy-image-*.txt,reports/trivy-image-*.html', fingerprint: true
+                script {
+                    env.IMG_HIGH = countSeverity("reports/trivy-image-${env.IMAGE_TAG}.json", "HIGH")
+                    env.IMG_CRIT = countSeverity("reports/trivy-image-${env.IMAGE_TAG}.json", "CRITICAL")
+                }
             }
         }
         
@@ -186,52 +231,37 @@ pipeline {
         }
     }
 
-    // ---------- POST: Slack notification + cleanup ----------
+    // ---------- POST: Telegram notification + cleanup ----------
     post {
         success {
             script {
                 def imageInfo = env.FULL_IMAGE ?: 'N/A (no changes)'
-                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} SUCCESS\n" +
-                          "Service: `ui`\n" +
-                          "Image: `${imageInfo}`\n" +
-                          "<${env.BUILD_URL}|View build>"
-                try {
-                    slackSend(color: 'good', message: msg)
-                } catch (Throwable err) {
-                    echo "Slack notification skipped: ${err.message}"
-                }
+                def msg = "<b>✅ ${env.JOB_NAME} #${env.BUILD_NUMBER} — SUCCESS</b>\n" +
+                          "Service: <code>ui</code>\n" +
+                          "Image: <code>${imageInfo}</code>\n" +
+                          "Trivy fs: HIGH=${env.FS_HIGH ?: '-'} CRIT=${env.FS_CRIT ?: '-'}\n" +
+                          "Trivy image: HIGH=${env.IMG_HIGH ?: '-'} CRIT=${env.IMG_CRIT ?: '-'}\n" +
+                          "<a href=\"${env.BUILD_URL}\">View build</a>"
+                notifyTelegram(msg)
             }
-            sh '''
-                echo "Pipeline SUCCESS - Image: ${FULL_IMAGE:-(no build)}"
-                echo "Service URL:"
-                kubectl get svc ui -n retail-store -o jsonpath="{.status.loadBalancer.ingress[0].hostname}" 2>/dev/null || echo "(LoadBalancer provisioning...)"
-            '''
         }
         failure {
             script {
-                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} FAILED\n" +
-                          "Service: `ui`\n" +
-                          "Stage: `${env.STAGE_NAME}`\n" +
-                          "<${env.BUILD_URL}|View build log>"
-                try {
-                    slackSend(color: 'danger', message: msg)
-                } catch (Throwable err) {
-                    echo "Slack notification skipped: ${err.message}"
-                }
+                def msg = "<b>❌ ${env.JOB_NAME} #${env.BUILD_NUMBER} — FAILED</b>\n" +
+                          "Service: <code>ui</code>\n" +
+                          "Stage: <code>${env.STAGE_NAME}</code>\n" +
+                          "<a href=\"${env.BUILD_URL}\">View build log</a>"
+                notifyTelegram(msg)
                 echo "Pipeline FAILED at stage: ${env.STAGE_NAME}"
             }
         }
         unstable {
             script {
-                def msg = "*${env.JOB_NAME}* #${env.BUILD_NUMBER} UNSTABLE\n" +
-                          "Service: `ui`\n" +
+                def msg = "<b>⚠️ ${env.JOB_NAME} #${env.BUILD_NUMBER} — UNSTABLE</b>\n" +
+                          "Service: <code>ui</code>\n" +
                           "Có test/scan issue, build vẫn pass.\n" +
-                          "<${env.BUILD_URL}|View build>"
-                try {
-                    slackSend(color: 'warning', message: msg)
-                } catch (Throwable err) {
-                    echo "Slack notification skipped"
-                }
+                          "<a href=\"${env.BUILD_URL}\">View build</a>"
+                notifyTelegram(msg)
             }
         }
         always {
