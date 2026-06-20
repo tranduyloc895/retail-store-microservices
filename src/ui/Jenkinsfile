@@ -137,10 +137,16 @@ pipeline {
                 withCredentials([string(credentialsId: 'sonarcloud-token', variable: 'SONAR_TOKEN')]) {
                     dir('src/ui') {
                         sh '''
+                            mkdir -p reports/sonar
                             ./mvnw clean verify sonar:sonar \
                                 -Dsonar.token=${SONAR_TOKEN} \
                                 -Dsonar.branch.name=main
+
+                            # archive scanner metadata
+                            cp target/sonar/report-task.txt reports/sonar/sonar-report-task.txt || true
+                            cp target/sonar/report-task.json reports/sonar/sonar-report-task.json || true
                         '''
+                        archiveArtifacts artifacts: 'src/ui/reports/sonar/*', fingerprint: true
                     }
                 }
             }
