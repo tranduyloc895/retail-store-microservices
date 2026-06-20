@@ -63,6 +63,33 @@ def sendTelegramDoc(String filePath, String caption) {
     }
 }
 
+// ---------- Monorepo change detection ----------
+// Trả về true nếu thư mục service thay đổi trong build này (so với lần build THÀNH
+// CÔNG gần nhất), hoặc khi build được kích hoạt thủ công (bấm Build Now). Dùng để
+// bỏ qua sạch các service không đổi trong monorepo — không tốn Trivy/Sonar và tránh
+// fail do FULL_IMAGE chưa set.
+def isServiceChanged(String serviceDir) {
+    // Build tay -> luôn chạy
+    if (!currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause').isEmpty()) {
+        return true
+    }
+    def out = sh(returnStdout: true, script: """
+        set +e
+        BASE='${env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: ''}'
+        [ -z "\$BASE" ] && BASE='HEAD~1'
+        # base khong ton tai (build dau / shallow clone) -> coi nhu co thay doi
+        if ! git rev-parse --verify "\$BASE^{commit}" >/dev/null 2>&1; then
+            echo CHANGED; exit 0
+        fi
+        if [ -n "\$(git diff --name-only "\$BASE" HEAD -- '${serviceDir}/')" ]; then
+            echo CHANGED
+        else
+            echo UNCHANGED
+        fi
+    """).trim()
+    return out == 'CHANGED'
+}
+
 pipeline {
     agent {
         label 'docker-agent'
@@ -70,7 +97,7 @@ pipeline {
 
     // ---------- Options: timeout, retry, log retention ----------
     options {
-        timeout(time: 30, unit: 'MINUTES')              
+        timeout(time: 30, unit: 'MINUTES')
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '15'))
         disableConcurrentBuilds()
@@ -86,7 +113,24 @@ pipeline {
     }
 
     stages {
+        // Stage đầu: phát hiện thay đổi. Nếu service không đổi (và không build tay)
+        // -> set cờ false + NOT_BUILT, mọi stage sau bị bỏ qua -> kết thúc tức thì.
+        stage('Detect changes') {
+            steps {
+                script {
+                    env.SERVICE_CHANGED = isServiceChanged(env.SERVICE_DIR) ? 'true' : 'false'
+                    if (env.SERVICE_CHANGED == 'true') {
+                        echo "Changes detected in ${env.SERVICE_DIR} (or manual build) -> running full pipeline."
+                    } else {
+                        echo "No changes in ${env.SERVICE_DIR} -> skipping (NOT_BUILT)."
+                        currentBuild.result = 'NOT_BUILT'
+                    }
+                }
+            }
+        }
+
         stage('Set IMAGE_TAG') {
+            when { expression { env.SERVICE_CHANGED == 'true' } }
             steps {
                 script {
                     env.IMAGE_TAG = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
@@ -95,6 +139,7 @@ pipeline {
         }
 
         stage('Prepare Maven cache') {
+            when { expression { env.SERVICE_CHANGED == 'true' } }
             steps {
                 dir('src/ui') {
                     sh 'chmod +x ./mvnw && ./mvnw -B dependency:resolve'
@@ -103,6 +148,7 @@ pipeline {
         }
 
         stage('Trivy fs scan') {
+            when { expression { env.SERVICE_CHANGED == 'true' } }
             steps {
                 dir('src/ui') {
                     sh '''
@@ -133,6 +179,7 @@ pipeline {
         }
 
         stage('SonarCloud Analysis') {
+            when { expression { env.SERVICE_CHANGED == 'true' } }
             steps {
                 withCredentials([string(credentialsId: 'sonarcloud-token', variable: 'SONAR_TOKEN')]) {
                     dir('src/ui') {
@@ -166,10 +213,7 @@ pipeline {
 
         stage('Build Docker Image') {
             when {
-                anyOf {
-                    changeset 'src/ui/**'
-                    triggeredBy 'UserIdCause'
-                }
+                expression { env.SERVICE_CHANGED == 'true' }
             }
             options {
                 timeout(time: 15, unit: 'MINUTES')
@@ -191,6 +235,7 @@ pipeline {
         }
 
         stage('Trivy image scan') {
+            when { expression { env.SERVICE_CHANGED == 'true' } }
             steps {
                 sh '''
                     mkdir -p reports
@@ -217,16 +262,13 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Push to ECR') {
             when {
                 allOf {
                     branch 'main'
                     not { changeRequest() }
-                    anyOf {
-                        changeset 'src/ui/**'
-                        triggeredBy 'UserIdCause'
-                    }
+                    expression { env.SERVICE_CHANGED == 'true' }
                 }
             }
             options {
@@ -250,10 +292,7 @@ pipeline {
                 allOf {
                     branch 'main'
                     not { changeRequest() }
-                    anyOf {
-                        changeset 'src/ui/**'
-                        triggeredBy 'UserIdCause'
-                    }
+                    expression { env.SERVICE_CHANGED == 'true' }
                 }
             }
             options {
