@@ -147,6 +147,20 @@ pipeline {
             }
         }
 
+        stage('Unit Tests') {
+            steps {
+                dir('src/ui') {
+                    sh './mvnw test -B'
+                }
+            }
+            post {
+                always {
+                    junit '**/target/surefire-reports/*.xml'
+                    // Coverage report đã được tạo bởi JaCoCo trong stage SonarCloud
+                }
+            }
+        }
+
         stage('Trivy fs scan') {
             when { expression { env.SERVICE_CHANGED == 'true' } }
             steps {
