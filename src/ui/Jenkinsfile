@@ -148,6 +148,7 @@ pipeline {
         }
 
         stage('Unit Tests') {
+            when { expression { env.SERVICE_CHANGED == 'true' } }
             steps {
                 dir('src/ui') {
                     sh './mvnw test -B'
