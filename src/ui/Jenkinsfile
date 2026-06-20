@@ -153,6 +153,14 @@ pipeline {
                         archiveArtifacts artifacts: 'reports/sonar/*', fingerprint: true
                     }
                 }
+                // Lấy dashboardUrl từ report-task.txt để gửi link qua Telegram.
+                // 2>/dev/null + '|| true' đảm bảo không làm fail build nếu thiếu file.
+                script {
+                    env.SONAR_URL = sh(
+                        script: "grep '^dashboardUrl=' src/ui/reports/sonar/sonar-report-task.txt 2>/dev/null | cut -d= -f2- || true",
+                        returnStdout: true
+                    ).trim()
+                }
             }
         }
 
@@ -287,15 +295,18 @@ pipeline {
         success {
             script {
                 def imageInfo = env.FULL_IMAGE ?: 'N/A (no changes)'
+                def sonarLine = env.SONAR_URL ? "SonarCloud: <a href=\"${env.SONAR_URL}\">View dashboard</a>\n" : ""
                 def msg = "<b>✅ ${env.JOB_NAME} #${env.BUILD_NUMBER} — SUCCESS</b>\n" +
                           "Service: <code>ui</code>\n" +
                           "Image: <code>${imageInfo}</code>\n" +
                           "Trivy fs: HIGH=${env.FS_HIGH ?: '-'} CRIT=${env.FS_CRIT ?: '-'}\n" +
                           "Trivy image: HIGH=${env.IMG_HIGH ?: '-'} CRIT=${env.IMG_CRIT ?: '-'}\n" +
+                          sonarLine +
                           "<a href=\"${env.BUILD_URL}\">View build</a>"
                 notifyTelegram(msg)
                 sendTelegramDoc("src/ui/reports/trivy-fs-${env.IMAGE_TAG}.html",  "Trivy fs report — ui #${env.BUILD_NUMBER}")
                 sendTelegramDoc("reports/trivy-image-${env.IMAGE_TAG}.html",       "Trivy image report — ui #${env.BUILD_NUMBER}")
+                sendTelegramDoc("src/ui/reports/sonar/sonar-report-task.txt",      "SonarCloud report-task — ui #${env.BUILD_NUMBER}")
             }
         }
         failure {
