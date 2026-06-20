@@ -142,11 +142,15 @@ pipeline {
                                 -Dsonar.token=${SONAR_TOKEN} \
                                 -Dsonar.branch.name=main
 
-                            # archive scanner metadata
-                            cp target/sonar/report-task.txt reports/sonar/sonar-report-task.txt || true
-                            cp target/sonar/report-task.json reports/sonar/sonar-report-task.json || true
+                            # archive scanner metadata if available
+                            if [ -f target/sonar/report-task.txt ]; then
+                                cp target/sonar/report-task.txt reports/sonar/sonar-report-task.txt
+                            fi
+                            if [ -f target/sonar/report-task.json ]; then
+                                cp target/sonar/report-task.json reports/sonar/sonar-report-task.json
+                            fi
                         '''
-                        archiveArtifacts artifacts: 'src/ui/reports/sonar/*', fingerprint: true
+                        archiveArtifacts artifacts: 'reports/sonar/*', fingerprint: true
                     }
                 }
             }
