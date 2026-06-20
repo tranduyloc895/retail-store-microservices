@@ -132,6 +132,20 @@ pipeline {
             }
         }
 
+        stage('SonarCloud Analysis') {
+            steps {
+                withCredentials([string(credentialsId: 'sonarcloud-token', variable: 'SONAR_TOKEN')]) {
+                    dir('src/ui') {
+                        sh '''
+                            ./mvnw clean verify sonar:sonar \
+                                -Dsonar.token=${SONAR_TOKEN} \
+                                -Dsonar.branch.name=main
+                        '''
+                    }
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             when {
                 anyOf {
