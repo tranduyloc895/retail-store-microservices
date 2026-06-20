@@ -151,7 +151,22 @@ pipeline {
             when { expression { env.SERVICE_CHANGED == 'true' } }
             steps {
                 dir('src/ui') {
-                    sh './mvnw test -B'
+                    sh '''
+                        mkdir -p reports
+                        ./mvnw test -B
+
+                        # Sinh báo cáo HTML từ surefire XML (KHÔNG chạy lại test)
+                        ./mvnw surefire-report:report-only -B || true
+
+                        # Copy ra reports/ với tên cố định để đính Telegram; reports/ nằm
+                        # ngoài target/ nên sống sót qua "mvn clean" ở stage SonarCloud.
+                        if [ -f target/site/surefire-report.html ]; then
+                            cp target/site/surefire-report.html reports/unit-test-${IMAGE_TAG}.html
+                        elif [ -f target/reports/surefire.html ]; then
+                            cp target/reports/surefire.html reports/unit-test-${IMAGE_TAG}.html
+                        fi
+                    '''
+                    archiveArtifacts artifacts: 'reports/unit-test-*.html', allowEmptyArchive: true, fingerprint: true
                 }
             }
             post {
@@ -358,6 +373,7 @@ pipeline {
                           sonarLine +
                           "<a href=\"${env.BUILD_URL}\">View build</a>"
                 notifyTelegram(msg)
+                sendTelegramDoc("src/ui/reports/unit-test-${env.IMAGE_TAG}.html", "Unit test report — ui #${env.BUILD_NUMBER}")
                 sendTelegramDoc("src/ui/reports/trivy-fs-${env.IMAGE_TAG}.html",  "Trivy fs report — ui #${env.BUILD_NUMBER}")
                 sendTelegramDoc("reports/trivy-image-${env.IMAGE_TAG}.html",       "Trivy image report — ui #${env.BUILD_NUMBER}")
                 sendTelegramDoc("src/ui/reports/sonar/sonar-report-task.txt",      "SonarCloud report-task — ui #${env.BUILD_NUMBER}")
