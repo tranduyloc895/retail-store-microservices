@@ -124,6 +124,46 @@ pipeline {
             }
         }
 
+        stage('SonarCloud Analysis') {
+            steps {
+                withCredentials([string(credentialsId: 'sonarcloud-token', variable: 'SONAR_TOKEN')]) {
+                    dir('src/catalog') {
+                        sh '''
+                            mkdir -p reports/sonar
+
+                            # Use installed sonar-scanner if available, otherwise run official Docker image
+                            if command -v sonar-scanner >/dev/null 2>&1; then
+                                sonar-scanner \
+                                  -Dsonar.projectKey=tranduyloc895_retail-store-microservices \
+                                  -Dsonar.organization=tranduyloc895 \
+                                  -Dsonar.host.url=https://sonarcloud.io \
+                                  -Dsonar.login=${SONAR_TOKEN} \
+                                  -Dsonar.sources=. \
+                                  -Dsonar.branch.name=main
+                            else
+                                docker run --rm -v "$(pwd)":/usr/src -w /usr/src sonarsource/sonar-scanner-cli:latest \
+                                  -Dsonar.projectKey=tranduyloc895_retail-store-microservices \
+                                  -Dsonar.organization=tranduyloc895 \
+                                  -Dsonar.host.url=https://sonarcloud.io \
+                                  -Dsonar.login=${SONAR_TOKEN} \
+                                  -Dsonar.sources=. \
+                                  -Dsonar.branch.name=main
+                            fi
+
+                            # archive scanner metadata if produced (.scannerwork used by sonar-scanner)
+                            if [ -f .scannerwork/report-task.txt ]; then
+                                cp .scannerwork/report-task.txt reports/sonar/sonar-report-task.txt
+                            fi
+                            if [ -f .scannerwork/report-task.json ]; then
+                                cp .scannerwork/report-task.json reports/sonar/sonar-report-task.json
+                            fi
+                        '''
+                        archiveArtifacts artifacts: 'reports/sonar/*', fingerprint: true
+                    }
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             when {
                 anyOf {
