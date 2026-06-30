@@ -36,8 +36,8 @@ Source code for the microservices of the **DevSecOps E-commerce** project (NT114
             │  Gin :8080│ │  :8080 │ :8080    NestJS :8080
             └──────┬────┘ └───┬────┘ ┌┴───┐   ┌──┴──┐
                    │          │      │    │   │     │
-               MariaDB    DynamoDB  PG   RMQ Redis  │
-               (catalog)  (carts) (orders)  (checkout)
+               MariaDB    DynamoDB  PG    Redis
+               (catalog)  (carts) (orders)(checkout)
 ```
 
 ## Microservices
@@ -47,7 +47,7 @@ Source code for the microservices of the **DevSecOps E-commerce** project (NT114
 | **UI** | Java 21 | Spring Boot 3.5 + Thymeleaf | 8080 | — | Web frontend; calls every other service |
 | **Catalog** | Go | Gin | 8080 | MariaDB | Product catalog API |
 | **Cart** | Java 21 | Spring Boot 3.5 | 8080 | DynamoDB (local) | Shopping cart API |
-| **Orders** | Java 21 | Spring Boot 3.5 | 8080 | PostgreSQL + RabbitMQ | Orders management API |
+| **Orders** | Java 21 | Spring Boot 3.5 | 8080 | PostgreSQL | Orders management API (messaging = in-memory, no broker) |
 | **Checkout** | TypeScript | NestJS 11 | 8080 | Redis | Checkout / payment API |
 
 ---
@@ -59,7 +59,7 @@ retail-store-microservices/
 ├── src/
 │   ├── ui/                    # Web UI (Java/Spring Boot)
 │   │   ├── Dockerfile         #   Multi-stage build, non-root user UID 10001
-│   │   ├── Jenkinsfile        #   Pipeline (Build → Push → Update GitOps)
+│   │   ├── Jenkinsfile        #   Pipeline: Detect→Test→Scan→Build→Push→Update GitOps
 │   │   ├── pom.xml
 │   │   └── src/
 │   │
@@ -148,55 +148,57 @@ The pipeline follows the **GitOps** model: Jenkins builds the image, pushes to E
 Developer pushes code (this repo)
         │
         ▼
-Jenkins Agent triggers the pipeline
+Jenkins Multibranch pipeline (Agent)
         │
-        ├─── Stage 1: Build Docker Image
-        │       • git rev-parse --short=7 HEAD → IMAGE_TAG
-        │       • docker build -t <ECR>/<repo>:<tag>
-        │
-        ├─── Stage 2: Push to ECR
-        │       • aws ecr get-login-password | docker login
-        │       • docker push
-        │
-        └─── Stage 3: Update GitOps
-                • git clone retail-store-gitops
-                • sed replaces the image tag in apps/<service>/values.yaml
-                • git commit + push to main
+        ├─ Detect changes ── service unchanged → NOT_BUILT (skip the rest)
+        ├─ Set IMAGE_TAG (git short SHA) + Prepare Maven cache (Java services)
+        ├─ Unit Tests (UI representative) → JUnit + HTML report
+        ├─ Trivy fs scan (report-only)
+        ├─ SonarCloud Analysis (UI representative, SAST)
+        ├─ Build Docker Image (tag = git SHA)
+        ├─ Trivy image scan (report-only)
+        ├─ Push to ECR (branch main)
+        └─ Update GitOps — sed image tag in apps/<service>/values.yaml, commit + push
                         │
                         ▼
-                ArgoCD polls (every 3 min) / webhook
+                ArgoCD polls (every 3 min) → sync → kubectl apply into EKS
                         │
                         ▼
-                ArgoCD sync → kubectl apply into EKS
-                        │
-                        ▼
-                Rolling pod update (K8s)
-                        │
-                        ▼
-                New version live behind the ELB
+                Rolling pod update → new version live behind the ELB
+        (post) → Telegram: build result + Trivy CVE summary + reports + SonarCloud link
 ```
 
-### Jenkinsfile (used by every service, parameterized)
+### Jenkinsfile (shared structure across services, parameterized)
 
-Located at `src/<service>/Jenkinsfile`. Three stages:
+Located at `src/<service>/Jenkinsfile`. All work stages are gated by the monorepo change flag:
 
 ```groovy
 pipeline {
     agent { label 'docker-agent' }
-
     environment {
         AWS_REGION    = 'ap-southeast-1'
         ECR_REPO_NAME = 'retail-store/<service>'
         EKS_CLUSTER   = 'ecommerce-cluster'
+        SERVICE_DIR   = 'src/<service>'
     }
-
     stages {
-        stage('Build Docker Image') { /* ... */ }
-        stage('Push to ECR')        { /* ... */ }
-        stage('Update GitOps')      { /* ... */ }
+        stage('Detect changes')      { /* set SERVICE_CHANGED; if unchanged → NOT_BUILT */ }
+        stage('Set IMAGE_TAG')       { /* git rev-parse --short=7 HEAD */ }
+        stage('Prepare Maven cache') { /* Java services only */ }
+        stage('Unit Tests')          { /* UI representative: mvnw test + JUnit/HTML report */ }
+        stage('Trivy fs scan')       { /* report-only, HTML + JSON */ }
+        stage('SonarCloud Analysis') { /* UI representative: SAST + coverage */ }
+        stage('Build Docker Image')  { /* docker build, tag = git SHA */ }
+        stage('Trivy image scan')    { /* report-only, HTML + JSON */ }
+        stage('Push to ECR')         { /* branch main only */ }
+        stage('Update GitOps')       { /* branch main only */ }
     }
+    // post { ... Telegram notify + attach reports ... }
 }
 ```
+
+> **Monorepo early-exit:** the 5 services share one repo, so any commit triggers every service's job. The `Detect changes` stage diffs the service folder against the last successful commit (or always runs on a manual build) and sets `SERVICE_CHANGED`; every later stage carries `when { expression { env.SERVICE_CHANGED == 'true' } }`, so an unchanged service ends `NOT_BUILT` instead of running/failing.
+> **Unit test + SonarCloud** are currently wired for the **UI service as a representative** (not yet the other four).
 
 **Key technical decisions:**
 
@@ -208,6 +210,8 @@ pipeline {
 | Dockerfile base image has UID 1000 in use | Create the app user with UID 10001 to avoid conflicts |
 | `sed` can silent-fail | After `sed`, `grep` verifies the new tag is present |
 | Pipeline commits even when nothing changed | `git diff --staged --quiet \|\| git commit` (idempotent) |
+| Monorepo: one commit triggers all 5 jobs | `Detect changes` stage + `SERVICE_CHANGED` flag gates every stage → unchanged service ends `NOT_BUILT` |
+| Security & quality shift-left | Trivy filesystem + image scan (report-only); SonarCloud SAST + unit test (UI representative) |
 
 ### Credentials to create in Jenkins
 
@@ -219,6 +223,7 @@ pipeline {
 | `github-scan-token` | Username with password | Multibranch job scans this repo via the GitHub API (avoids the 60 req/h anonymous rate limit) |
 | `telegram-bot-token` | Secret text | Telegram Bot API token (from BotFather) — build notifications |
 | `telegram-chat-id` | Secret text | Telegram chat/channel ID the bot posts to (a group id is negative) |
+| `sonarcloud-token` | Secret text | SonarCloud analysis token (SAST) — used by the UI pipeline |
 
 **`github-gitops-token` permissions** (least-privilege):
 - Repository: only `retail-store-gitops`
@@ -239,7 +244,7 @@ Create **one job per service** (5 total), differing only in name + Script Path:
 - **Scan Repository Triggers:** ☑ Periodically if not otherwise run → 1 minute (Jenkins is private, no webhook yet)
 - *(Optional)* Branch Sources → GitHub → Add behaviour → **Disable GitHub Notifications** (silences the harmless `403 Could not update commit status` log line)
 
-> **⚠️ First build of a branch is skipped by design.** The initial auto-scan build is triggered by *branch indexing* (not a user) and has no previous build to diff, so `triggeredBy 'UserIdCause'` and `changeset 'src/<svc>/**'` are both false → all stages skip. **Open the `main` sub-job and click Build Now** for the first real deploy. From the 2nd commit onward, pushes touching `src/<svc>/**` trigger automatically.
+> **⚠️ First build / unchanged service ends `NOT_BUILT`.** The `Detect changes` stage decides whether to run: a manual build always runs; otherwise it diffs the service folder against the last successful commit. On the initial auto-scan (branch indexing) or a commit not touching `src/<svc>/**`, the service ends `NOT_BUILT` (grey, **not** failed). **Open the `main` sub-job and click Build Now** for the first real deploy.
 
 ### Automatic trigger (roadmap)
 
@@ -250,8 +255,8 @@ New commits are picked up by the **periodic repo scan** (1 minute) configured ab
 Every build reports its result to **Telegram** from the Jenkinsfile `post` block (this replaced an earlier Slack integration). Delivery is best-effort — a send error is caught and never fails the build. Telegram fits the private-subnet Jenkins well because it is a plain **outbound** HTTPS call (no inbound webhook needed).
 
 Each build sends:
-- A **summary message**: result (SUCCESS / FAILURE / UNSTABLE), service, image tag, and — on success — a **Trivy scan summary** (HIGH / CRITICAL counts for both the filesystem and image scans).
-- On success, the two **Trivy HTML reports** as file attachments (Telegram `sendDocument`).
+- A **summary message**: result (SUCCESS / FAILURE / UNSTABLE), service, image tag, and — on success — a **Trivy scan summary** (HIGH / CRITICAL counts for both the filesystem and image scans). For the UI service it also includes the **SonarCloud dashboard link**.
+- On success, the report files as attachments (Telegram `sendDocument`): the two **Trivy HTML reports**, and — for UI — the **unit-test HTML report** plus the SonarCloud **`report-task.txt`**.
 
 Three Groovy helpers at the top of each `src/<service>/Jenkinsfile` implement this:
 
